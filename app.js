@@ -97,7 +97,8 @@ const candle1m = createCandleBuilder(60 * 1000, (candle) => {
   const entrySignal = evaluateEntry(
     candles,
     currentDailyBias,
-    currentStructure5m
+    currentStructure5m,
+    atr
   );
 
   if (feedStatus === "HALT_ENTRIES") {
@@ -134,7 +135,8 @@ const candle5m = createCandleBuilder(5 * 60 * 1000, (candle) => {
 
   // Evaluate structure
   const candles = store5m.getCandles();
-  const newStructure = evaluateStructure(candles);
+  const atr5m = calculateATR(store5m.getCandles());
+  const newStructure = evaluateStructure(candles, atr5m);
 
   // Log only if structure changes
   if (newStructure !== currentStructure5m) {

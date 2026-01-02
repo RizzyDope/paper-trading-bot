@@ -1,14 +1,5 @@
-
-/**
- * Evaluates 5m entry conditions
- * @param {Array} candles - array of CLOSED 5m candles (oldest → newest)
- * @param {"BULLISH" | "BEARISH" | "NEUTRAL"} bias
- * @param {"BULLISH_STRUCTURE" | "BEARISH_STRUCTURE" | "RANGE"} structure
- * @returns {"LONG_ENTRY" | "SHORT_ENTRY" | null}
- */
-function evaluateEntry(candles, bias, structure) {
-  // Need at least 3 candles to evaluate pullback + reclaim
-  if (!candles || candles.length < 3) {
+function evaluateEntry(candles, bias, structure, atr) {
+  if (!candles || candles.length < 3 || !atr) {
     return null;
   }
 
@@ -16,15 +7,30 @@ function evaluateEntry(candles, bias, structure) {
   const c2 = candles[candles.length - 2];
   const c3 = candles[candles.length - 1];
 
+  // 1m tuning
+  const PULLBACK_ATR = 0.3;
+  const RECLAIM_ATR = 0.2;
+
   // -----------------------
   // BULLISH ENTRY
   // -----------------------
   if (bias === "BULLISH" && structure === "BULLISH_STRUCTURE") {
+    const pullbackDepth =
+      Math.max(
+        c1.close - c2.low,
+        c1.close - c2.close
+      );
+
     const pullback =
-      c2.low < c1.low || c2.close < c1.close;
+      (c2.low < c1.low || c2.close < c1.close) &&
+      pullbackDepth >= atr * PULLBACK_ATR;
+
+    const reclaimStrength =
+      c3.close - c2.high;
 
     const reclaim =
-      c3.close > c2.high;
+      c3.close > c2.high &&
+      reclaimStrength >= atr * RECLAIM_ATR;
 
     if (pullback && reclaim) {
       return "LONG_ENTRY";
@@ -35,11 +41,22 @@ function evaluateEntry(candles, bias, structure) {
   // BEARISH ENTRY
   // -----------------------
   if (bias === "BEARISH" && structure === "BEARISH_STRUCTURE") {
+    const pullbackDepth =
+      Math.max(
+        c2.high - c1.close,
+        c2.close - c1.close
+      );
+
     const pullback =
-      c2.high > c1.high || c2.close > c1.close;
+      (c2.high > c1.high || c2.close > c1.close) &&
+      pullbackDepth >= atr * PULLBACK_ATR;
+
+    const breakdownStrength =
+      c2.low - c3.close;
 
     const breakdown =
-      c3.close < c2.low;
+      c3.close < c2.low &&
+      breakdownStrength >= atr * RECLAIM_ATR;
 
     if (pullback && breakdown) {
       return "SHORT_ENTRY";
@@ -50,8 +67,3 @@ function evaluateEntry(candles, bias, structure) {
 }
 
 module.exports = { evaluateEntry };
-
-
-
-
-

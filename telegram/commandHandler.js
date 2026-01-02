@@ -62,7 +62,7 @@ function startTelegramBot({
 • Equity: ${account.equity.toFixed(2)}
 `;
 
-    bot.sendMessage(chatId, status, { parse_mode: "Markdown" });
+    bot.sendMessage(chatId, status);
   });
 
   // /performance
@@ -86,7 +86,7 @@ Avg R: ${safeNum(summary.avgR)}
 Equity: ${safeNum(summary.equity)}
 `;
 
-      bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
+      bot.sendMessage(chatId, text);
     } catch (err) {
       log("❌ /performance error:", err.message);
       bot.sendMessage(chatId, "⚠️ Performance data not ready yet");
@@ -114,7 +114,7 @@ Equity: ${safeNum(summary.equity)}
 • Size: ${pos.size.toFixed(4)}
 `;
 
-    bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
+    bot.sendMessage(chatId, text);
   });
 }
 

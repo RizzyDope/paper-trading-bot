@@ -1,28 +1,70 @@
 /**
- * Evaluates higher-timeframe (1D) bias
- * @param {Array} candles - array of CLOSED daily candles (oldest → newest)
- * @returns {"BULLISH" | "BEARISH" | "NEUTRAL"}
+ * Evaluates higher-timeframe (4H) bias
+ * Uses STRUCTURAL control, not candle color
+ *
+ * Rules encoded exactly from your description
  */
-function evaluateDailyBias(candles) {
-  // We need at least 2 candles to compare structure
-  if (candles.length < 3) {
+function evaluateDailyBias(candles, previousBias = "NEUTRAL") {
+  // We need at least 3 candles:
+  // - one forming (ignored)
+  // - two closed for comparison
+  if (!candles || candles.length < 3) {
+    return previousBias;
+  }
+
+  // Ignore the currently forming candle
+  const closed = candles.slice(0, -1);
+
+  // Last two CLOSED candles
+  const prev = closed[closed.length - 2];
+  const last = closed[closed.length - 1];
+
+  /* =========================
+     🟢 BULLISH CONDITIONS
+     ========================= */
+
+  const bullishContinuation =
+    last.high > prev.high &&
+    last.close > prev.close;
+
+  const bullishInvalidation =
+    last.close < prev.open &&
+    last.low < prev.low;
+
+  /* =========================
+     🔴 BEARISH CONDITIONS
+     ========================= */
+
+  const bearishContinuation =
+    last.low < prev.low &&
+    last.close < prev.close;
+
+  const bearishInvalidation =
+    last.close > prev.open &&
+    last.high > prev.high;
+
+  /* =========================
+     🧠 STATE MACHINE
+     ========================= */
+
+  // If currently BULLISH
+  if (previousBias === "BULLISH") {
+    if (bullishContinuation) return "BULLISH";
+    if (bullishInvalidation) return "BEARISH";
     return "NEUTRAL";
   }
 
-  const last = candles[candles.length - 2];
-  const previous = candles[candles.length - 3];
-
-  // Bullish break
-  if (last.close > previous.high) {
-    return "BULLISH";
+  // If currently BEARISH
+  if (previousBias === "BEARISH") {
+    if (bearishContinuation) return "BEARISH";
+    if (bearishInvalidation) return "BULLISH";
+    return "NEUTRAL";
   }
 
-  // Bearish break
-  if (last.close < previous.low) {
-    return "BEARISH";
-  }
+  // If currently NEUTRAL
+  if (bullishContinuation) return "BULLISH";
+  if (bearishContinuation) return "BEARISH";
 
-  // No decisive break
   return "NEUTRAL";
 }
 
