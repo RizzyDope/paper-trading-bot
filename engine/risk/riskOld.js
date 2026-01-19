@@ -23,16 +23,6 @@ function createRiskEngine({
     dailyLoss = 0;
   }
 
-  // 🔹 NEW: restore loss after restart
-  function setDailyLoss(amount) {
-    dailyLoss = amount;
-  }
-
-  // 🔹 NEW: visibility for logs / Telegram
-  function getDailyLoss() {
-    return dailyLoss;
-  }
-
   function calculatePositionSize({
     entryPrice,
     stopPrice,
@@ -50,8 +40,6 @@ function createRiskEngine({
     canTakeTrade,
     registerLoss,
     resetDailyLoss,
-    setDailyLoss, // NEW
-    getDailyLoss, // NEW
     calculatePositionSize,
   };
 }

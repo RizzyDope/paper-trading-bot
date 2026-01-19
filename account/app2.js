@@ -16,11 +16,13 @@ const { createCandleStore } = require("./storage/stateStore");
 const { createCandleBuilder } = require("./market/candleBuilder");
 const { createSymbolEngine } = require("./engine/symbolEngine");
 
+
 start();
 
 setInterval(() => {
   log("💓 system heartbeat");
 }, 60_000);
+
 
 function isTradeTimeAllowed() {
   const now = new Date();
@@ -57,21 +59,6 @@ const executor = createBybitTestnetExecutor({
   log,
 });
 
-/* ======================================================
-   🔄 STARTUP POSITION RESYNC (SAFE, ONCE)
-   ====================================================== */
-(async () => {
-  try {
-    log("🔄 Resyncing positions from exchange...");
-    await executor.resyncPosition("BTCUSDT");
-    await executor.resyncPosition("TRXUSDT");
-    log("✅ Position resync complete");
-  } catch (err) {
-    log("❌ Position resync failed:", err.message);
-  }
-})();
-/* ====================================================== */
-
 const feedHealth = createFeedHealth({ log });
 
 startTelegramBot({
@@ -80,8 +67,8 @@ startTelegramBot({
   executor,
   performanceTracker,
   feedHealth,
-  getBias: () => "MULTI",
-  getStructure: () => "MULTI",
+  getBias: () => "MULTI", // per-symbol now
+  getStructure: () => "MULTI", // per-symbol now
   structureTF: "5m",
   biasTF: "4h",
   log,
@@ -138,15 +125,17 @@ const engines = {
 };
 
 startPriceStream(({ symbol, bid, ask, timestamp }) => {
+
   checkDailyRiskReset();
 
   const engine = engines[symbol];
   if (!engine) return;
 
-  const midPrice = (bid + ask) / 2;
+  const midPrice = (bid + ask) /2;
 
   engine.onPrice(midPrice, timestamp);
-  executor.onPrice({ bid, ask });
+
+  executor.onPrice({bid, ask});
 }, feedHealth);
 
 process.on("SIGINT", stop);

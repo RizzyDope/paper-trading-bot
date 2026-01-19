@@ -108,30 +108,18 @@ function createPaperExecutor({ account, riskEngine, performanceTracker, log }) {
   }
 }
 
-  function onPrice(price) {
+  function onPrice({ bid, ask }) {
     const pos = account.openPosition;
     if (!pos) return;
 
-    // 🔴 STOP LOSS
-    if (pos.side === "LONG" && price <= pos.stopPrice) {
-      closePosition(price, "STOP_LOSS");
-      return;
+    if (pos.side === "LONG") {
+      if (bid <= pos.stopPrice) return closePosition(bid, "STOP_LOSS");
+      if (bid >= pos.takeProfitPrice) return closePosition(bid, "TAKE_PROFIT");
     }
 
-    if (pos.side === "SHORT" && price >= pos.stopPrice) {
-      closePosition(price, "STOP_LOSS");
-      return;
-    }
-
-    // 🟢 TAKE PROFIT
-    if (pos.side === "LONG" && price >= pos.takeProfitPrice) {
-      closePosition(price, "TAKE_PROFIT");
-      return;
-    }
-
-    if (pos.side === "SHORT" && price <= pos.takeProfitPrice) {
-      closePosition(price, "TAKE_PROFIT");
-      return;
+    if (pos.side === "SHORT") {
+      if (ask >= pos.stopPrice) return closePosition(ask, "STOP_LOSS");
+      if (ask <= pos.takeProfitPrice) return closePosition(ask, "TAKE_PROFIT");
     }
   }
 

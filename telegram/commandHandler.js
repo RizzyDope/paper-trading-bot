@@ -11,7 +11,7 @@ function safeNum(n) {
 function startTelegramBot({
   token,
   account,
-  paperExecutor,
+  executor,
   performanceTracker,
   feedHealth,
   getBias,
@@ -58,7 +58,7 @@ function startTelegramBot({
 • Bias (${biasTF}): ${getBias()}
 • Structure (${structureTF}): ${getStructure()}
 • Feed: ${feedHealth.getStatus()}
-• Open Position: ${paperExecutor.hasOpenPosition() ? "YES" : "NO"}
+• Open Position: ${executor.hasOpenPosition() ? "YES" : "NO"}
 • Equity: ${account.equity.toFixed(2)}
 `;
 
