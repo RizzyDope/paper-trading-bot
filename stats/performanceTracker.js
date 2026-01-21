@@ -1,40 +1,82 @@
-function createPerformanceTracker({ log }) {
+/**
+ * PerformanceTracker — Option A
+ * Pure trade ledger with derived statistics
+ */
+
+function createPerformanceTracker({ startingEquity }) {
+  if (!Number.isFinite(startingEquity)) {
+    throw new Error("PerformanceTracker requires startingEquity");
+  }
+
   const trades = [];
 
   function recordTrade(trade) {
-    trades.push(trade);
+    const {
+      side,
+      entry,
+      exit,
+      pnl,
+      result,
+      reason,
+      durationMinutes,
+      r,
+    } = trade;
 
-    log(
-      `📊 Trade recorded | ${trade.side} ${trade.result} pnl=${trade.pnl.toFixed(
-        2
-      )} R=${trade.rMultiple.toFixed(2)}`
-    );
+    trades.push({
+      side,
+      entry,
+      exit,
+      pnl,
+      r,
+      result,
+      reason,
+      durationMinutes,
+      timestamp: Date.now(),
+    });
   }
 
   function getSummary() {
-    const total = trades.length;
-    if (total === 0) return null;
+    const totalTrades = trades.length;
 
-    const wins = trades.filter(t => t.result === "WIN").length;
-    const losses = total - wins;
+    let wins = 0;
+    let losses = 0;
+    let netPnl = 0;
+    let totalR = 0;
 
-    const totalPnL = trades.reduce((sum, t) => sum + t.pnl, 0);
-    const avgR =
-      trades.reduce((sum, t) => sum + t.rMultiple, 0) / total;
+    for (const t of trades) {
+      netPnl += t.pnl;
+      totalR += Number.isFinite(t.r) ? t.r : 0;
+
+      if (t.result === "WIN") wins++;
+      if (t.result === "LOSS") losses++;
+    }
+
+    const avgR = totalTrades > 0 ? totalR / totalTrades : 0;
+    const equity = startingEquity + netPnl;
 
     return {
-      totalTrades: total,
+      totalTrades,
       wins,
       losses,
-      winRate: (wins / total) * 100,
-      totalPnL,
+      netPnl,
       avgR,
+      equity,
     };
+  }
+
+  function getTrades() {
+    return [...trades];
+  }
+
+  function reset() {
+    trades.length = 0;
   }
 
   return {
     recordTrade,
     getSummary,
+    getTrades,
+    reset,
   };
 }
 

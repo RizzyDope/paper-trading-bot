@@ -3,6 +3,7 @@ const { log } = require("./core/logger");
 const env = require("./config/env");
 const { startTelegramBot } = require("./telegram/commandHandler");
 const { startPriceStream } = require("./market/priceStream");
+const { fetchMissingCandles } = require("./market/candleBackfill");
 const { createFeedHealth } = require("./market/feedHealth");
 const { evaluateDailyBias } = require("./engine/strategy/biasEvaluator");
 const { evaluateStructure } = require("./engine/strategy/structureEvaluator");
@@ -48,7 +49,9 @@ const account = {
   openPosition: null,
 };
 
-const performanceTracker = createPerformanceTracker({ log });
+const performanceTracker = createPerformanceTracker({
+  startingEquity: account.equity, // 10000
+});
 
 const executor = createBybitTestnetExecutor({
   account,
@@ -64,7 +67,7 @@ const executor = createBybitTestnetExecutor({
   try {
     log("🔄 Resyncing positions from exchange...");
     await executor.resyncPosition("BTCUSDT");
-    await executor.resyncPosition("TRXUSDT");
+    await executor.resyncPosition("SOLUSDT");
     log("✅ Position resync complete");
   } catch (err) {
     log("❌ Position resync failed:", err.message);
@@ -83,7 +86,7 @@ startTelegramBot({
   getBias: () => "MULTI",
   getStructure: () => "MULTI",
   structureTF: "5m",
-  biasTF: "4h",
+  biasTF: "2h",
   log,
 });
 
@@ -112,10 +115,12 @@ const btcEngine = createSymbolEngine({
 
   createCandleStore,
   createCandleBuilder,
+
+  fetchMissingCandles,
 });
 
 const trxEngine = createSymbolEngine({
-  symbol: "TRXUSDT",
+  symbol: "SOLUSDT",
   log,
   executor,
   riskEngine,
@@ -130,11 +135,13 @@ const trxEngine = createSymbolEngine({
 
   createCandleStore,
   createCandleBuilder,
+
+  fetchMissingCandles,
 });
 
 const engines = {
   BTCUSDT: btcEngine,
-  TRXUSDT: trxEngine,
+  SOLUSDT: trxEngine,
 };
 
 startPriceStream(({ symbol, bid, ask, timestamp }) => {

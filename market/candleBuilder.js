@@ -7,8 +7,13 @@ const { log } = require("../core/logger");
  * - 15m = 15 * 60 * 1000
  * - 1D = 24 * 60 * 60 * 1000
  */
-function createCandleBuilder(timeframeMs, onCandleClose) {
+function createCandleBuilder(
+  timeframeMs,
+  onCandleClose,
+  { onGapDetected } = {}
+) {
   let currentCandle = null;
+  let lastCandleTime = null;
 
   function getBucketTime(timestamp) {
     return Math.floor(timestamp / timeframeMs) * timeframeMs;
@@ -26,11 +31,27 @@ function createCandleBuilder(timeframeMs, onCandleClose) {
         low: price,
         close: price,
       };
+      lastCandleTime = bucketTime;
       return;
     }
 
-    // New candle bucket → close previous candle
+    // New candle bucket
     if (bucketTime !== currentCandle.startTime) {
+      // 🔍 GAP DETECTION
+      const gapMs = bucketTime - lastCandleTime;
+      const expectedMs = timeframeMs;
+
+      if (gapMs > expectedMs * 1.5 && onGapDetected) {
+        log(
+          `[GAP] Missing candles detected: ${new Date(
+            lastCandleTime
+          ).toISOString()} → ${new Date(bucketTime).toISOString()}`
+        );
+
+        onGapDetected(lastCandleTime, bucketTime);
+      }
+
+      // Close previous candle
       onCandleClose(currentCandle);
 
       // Start new candle
@@ -41,6 +62,8 @@ function createCandleBuilder(timeframeMs, onCandleClose) {
         low: price,
         close: price,
       };
+
+      lastCandleTime = bucketTime;
       return;
     }
 

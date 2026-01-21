@@ -9,6 +9,10 @@ function createBybitTestnetExecutor({
 }) {
   const BASE_URL = "https://api-testnet.bybit.com";
 
+  // =====================================================
+  // SIGNING HELPERS
+  // =====================================================
+
   function sign(params, secret) {
     const ordered = Object.keys(params)
       .sort()
@@ -29,6 +33,9 @@ function createBybitTestnetExecutor({
     return safe;
   }
 
+  // =====================================================
+  // POST (ORDER-RELATED) REQUESTS — UNCHANGED
+  // =====================================================
   async function privateRequest(path, params) {
     const timestamp = Date.now();
 
@@ -69,10 +76,67 @@ function createBybitTestnetExecutor({
     }
   }
 
-  // 🔎 STEP 1 — Query live open position (SAFE)
+  // =====================================================
+  // GET REQUESTS (REQUIRED FOR RESYNC) — NEW & JUSTIFIED
+  // =====================================================
+  function signGet(queryString, timestamp, recvWindow) {
+    const payload =
+      timestamp +
+      process.env.BYBIT_TESTNET_API_KEY +
+      recvWindow +
+      queryString;
+
+    return crypto
+      .createHmac("sha256", process.env.BYBIT_TESTNET_API_SECRET)
+      .update(payload)
+      .digest("hex");
+  }
+
+  async function privateGet(path, query) {
+    const timestamp = Date.now().toString();
+
+    const queryString = Object.keys(query)
+      .sort()
+      .map((k) => `${k}=${query[k]}`)
+      .join("&");
+
+    const recvWindow = "5000";
+    const signature = signGet(queryString, timestamp, recvWindow);
+
+    try {
+      const res = await axios.get(`${BASE_URL}${path}?${queryString}`, {
+        headers: {
+          "X-BAPI-API-KEY": process.env.BYBIT_TESTNET_API_KEY,
+          "X-BAPI-SIGN": signature,
+          "X-BAPI-TIMESTAMP": timestamp,
+          "X-BAPI-RECV-WINDOW": "5000",
+        },
+        timeout: 10_000,
+      });
+
+      if (res.data?.retCode !== 0) {
+        log("❌ BYBIT API ERROR");
+        log(`Path: ${path}`);
+        log(`Code: ${res.data.retCode}`);
+        log(`Message: ${res.data.retMsg}`);
+        return null;
+      }
+
+      return res.data;
+    } catch (err) {
+      log("💥 BYBIT REQUEST FAILED");
+      log(`Path: ${path}`);
+      log(`Error: ${err.message}`);
+      return null;
+    }
+  }
+
+  // =====================================================
+  // 🔎 RESYNC — FIXED (GET, NOT POST)
+  // =====================================================
   async function fetchOpenPosition(symbol) {
     try {
-      const res = await privateRequest("/v5/position/list", {
+      const res = await privateGet("/v5/position/list", {
         category: "linear",
         symbol,
       });
@@ -96,7 +160,6 @@ function createBybitTestnetExecutor({
     }
   }
 
-  // 🔄 STEP 2 — Resync local state with Bybit (CRITICAL)
   async function resyncPosition(symbol) {
     log(`[RESYNC] Checking live position for ${symbol}`);
 
@@ -119,6 +182,9 @@ function createBybitTestnetExecutor({
     };
   }
 
+  // =====================================================
+  // CORE TRADING LOGIC — UNCHANGED
+  // =====================================================
   function hasOpenPosition() {
     return account.openPosition !== null;
   }
@@ -154,6 +220,8 @@ function createBybitTestnetExecutor({
     }
 
     const riskPerUnit = Math.abs(entryPrice - stopPrice);
+    const riskAmount = riskPerUnit * size;
+
     const takeProfitPrice =
       side === "LONG"
         ? entryPrice + riskPerUnit * 2
@@ -166,7 +234,12 @@ function createBybitTestnetExecutor({
       stopPrice,
       takeProfitPrice,
       size,
+
+      // ✅ NEW (required for stats)
+      openedAt: Date.now(),
+      riskAmount,
     };
+
 
     log(`[EXEC] Position opened`);
   }
@@ -174,6 +247,9 @@ function createBybitTestnetExecutor({
   async function closePosition(exitPrice, reason) {
     const pos = account.openPosition;
     if (!pos) return;
+
+    const durationMs = Date.now() - pos.openedAt;
+    const durationMinutes = durationMs / 60000;
 
     const side = pos.side === "LONG" ? "Sell" : "Buy";
 
@@ -199,6 +275,11 @@ function createBybitTestnetExecutor({
         ? (exitPrice - pos.entryPrice) * pos.size
         : (pos.entryPrice - exitPrice) * pos.size;
 
+        const r =
+        pos.riskAmount > 0
+          ? pnl / pos.riskAmount
+          : 0;
+
     account.equity += pnl;
 
     if (pnl < 0) {
@@ -210,8 +291,10 @@ function createBybitTestnetExecutor({
       entry: pos.entryPrice,
       exit: exitPrice,
       pnl,
+      r,
       result: pnl > 0 ? "WIN" : "LOSS",
       reason,
+      durationMinutes,
     });
 
     log(
@@ -270,7 +353,7 @@ function createBybitTestnetExecutor({
     onDecision,
     onPrice,
     hasOpenPosition,
-    resyncPosition, // ✅ NEW
+    resyncPosition, // ✅ FIXED & WORKING
   };
 }
 

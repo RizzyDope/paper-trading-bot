@@ -1,12 +1,18 @@
 const TelegramBot = require("node-telegram-bot-api");
 
 /**
- * Read-only Telegram command handler (restricted access)
+ * Telegram command handler (controlled access)
+ * Supports pause/resume WITHOUT affecting open positions
  */
 
 function safeNum(n) {
   return Number.isFinite(n) ? n.toFixed(2) : "0.00";
 }
+
+// 🔒 GLOBAL TRADE CONTROL (entry gate only)
+const tradeControl = {
+  enabled: true,
+};
 
 function startTelegramBot({
   token,
@@ -34,13 +40,13 @@ function startTelegramBot({
 
   const bot = new TelegramBot(token, { polling: true });
 
-  log("🤖 Telegram bot started (READ-ONLY, restricted)");
+  log("🤖 Telegram bot started (CONTROL ENABLED, restricted)");
 
   function isAuthorized(msg) {
     return msg.chat.id === ALLOWED_CHAT_ID;
   }
 
-  // Log unauthorized attempts
+  // 🚨 Log unauthorized access attempts
   bot.on("message", (msg) => {
     if (!isAuthorized(msg)) {
       log(`🚫 Unauthorized Telegram access attempt from chat ${msg.chat.id}`);
@@ -58,6 +64,7 @@ function startTelegramBot({
 • Bias (${biasTF}): ${getBias()}
 • Structure (${structureTF}): ${getStructure()}
 • Feed: ${feedHealth.getStatus()}
+• Trading: ${tradeControl.enabled ? "ACTIVE" : "PAUSED"}
 • Open Position: ${executor.hasOpenPosition() ? "YES" : "NO"}
 • Equity: ${account.equity.toFixed(2)}
 `;
@@ -116,6 +123,58 @@ Equity: ${safeNum(summary.equity)}
 
     bot.sendMessage(chatId, text);
   });
+
+  // ⏸️ /pause — stop NEW trades only
+  bot.onText(/\/pause/, (msg) => {
+    if (!isAuthorized(msg)) return;
+
+    const chatId = msg.chat.id;
+
+    if (!tradeControl.enabled) {
+      bot.sendMessage(chatId, "⏸️ Trading is already paused");
+      return;
+    }
+
+    tradeControl.enabled = false;
+    log("⏸️ Trading PAUSED via Telegram");
+
+    bot.sendMessage(
+      chatId,
+      "⏸️ *Trading paused*\nExisting positions remain managed normally."
+    );
+  });
+
+  // ▶️ /resume — allow new trades
+  bot.onText(/\/resume/, (msg) => {
+    if (!isAuthorized(msg)) return;
+
+    const chatId = msg.chat.id;
+
+    if (tradeControl.enabled) {
+      bot.sendMessage(chatId, "▶️ Trading is already active");
+      return;
+    }
+
+    tradeControl.enabled = true;
+    log("▶️ Trading RESUMED via Telegram");
+
+    bot.sendMessage(chatId, "▶️ *Trading resumed*");
+  });
+
+  // /trading — explicit check
+  bot.onText(/\/trading/, (msg) => {
+    if (!isAuthorized(msg)) return;
+
+    const chatId = msg.chat.id;
+
+    bot.sendMessage(
+      chatId,
+      `⚙️ Trading is currently *${tradeControl.enabled ? "ACTIVE" : "PAUSED"}*`
+    );
+  });
+
+  // 🔁 EXPORT CONTROL FOR STRATEGY ENGINE
+  startTelegramBot.tradeControl = tradeControl;
 }
 
 module.exports = { startTelegramBot };

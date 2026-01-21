@@ -7,14 +7,15 @@ const { log } = require("../core/logger");
  */
 function startPriceStream(onPrice, feedHealth) {
   const url = "wss://stream-testnet.bybit.com/v5/public/linear";
-  const symbols = ["BTCUSDT", "TRXUSDT"];
+  const symbols = ["BTCUSDT", "SOLUSDT"];
 
   let ws = null;
   let reconnectTimeout = null;
   const RECONNECT_DELAY_MS = 5000;
 
   let tickCount = 0;
-  let lastTickLog = Date.now();
+  let lastTickLog = {};
+  let lastAliveLog = Date.now();
 
   function connect() {
     ws = new WebSocket(url);
@@ -58,9 +59,16 @@ function startPriceStream(onPrice, feedHealth) {
 
       tickCount++;
       const now = Date.now();
-      if (now - lastTickLog >= 60_000) {
+
+      // ✅ NEW: per-symbol millisecond tick confirmation (throttled)
+      // if (!lastTickLog[symbol] || now - lastTickLog[symbol] >= 1000) {
+      //   log(`[TICK] ${symbol} ${bid}/${ask} @ ${timestamp}`);
+      //   lastTickLog[symbol] = now;
+      // }
+      
+      if (now - lastAliveLog >= 60_000) {
         log(`📈 WS alive — ${tickCount} updates`);
-        lastTickLog = now;
+        lastAliveLog = now;
       }
 
       feedHealth.recordTick();
