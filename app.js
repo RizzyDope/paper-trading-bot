@@ -12,6 +12,7 @@ const { decide } = require("./engine/strategy/decisionEngine");
 const { createRiskEngine } = require("./engine/risk/riskEngine");
 const { calculateATR } = require("./engine/risk/atr");
 const { createBybitTestnetExecutor } = require("./engine/execution/bybitTestnetExecutor");
+const { createExecutionTracker } = require("./engine/execution/executionTracker");
 const { createPerformanceTracker } = require("./stats/performanceTracker");
 const { createCandleStore } = require("./storage/stateStore");
 const { createCandleBuilder } = require("./market/candleBuilder");
@@ -53,11 +54,16 @@ const performanceTracker = createPerformanceTracker({
   startingEquity: account.equity, // 10000
 });
 
+const executionTracker = createExecutionTracker();
+
 const executor = createBybitTestnetExecutor({
   account,
   riskEngine,
   performanceTracker,
+  executionTracker,
   log,
+  notifyTradeOpen: startTelegramBot.notifyTradeOpen,
+  notifyTradeClose: startTelegramBot.notifyTradeClose,
 });
 
 /* ======================================================
@@ -77,24 +83,19 @@ const executor = createBybitTestnetExecutor({
 
 const feedHealth = createFeedHealth({ log });
 
-startTelegramBot({
-  token: process.env.TELEGRAM_BOT_TOKEN,
-  account,
-  executor,
-  performanceTracker,
-  feedHealth,
-  getBias: () => "MULTI",
-  getStructure: () => "MULTI",
-  structureTF: "5m",
-  biasTF: "2h",
-  log,
-});
-
 function checkDailyRiskReset() {
   const currentUTCDate = new Date().getUTCDate();
   if (currentUTCDate !== lastRiskResetUTCDate) {
     log("🔄 New UTC day detected — resetting daily risk");
+
+     const summary = executionTracker.getSummary();
+
+      if (startTelegramBot.notifyDailyExecutionSummary) {
+        startTelegramBot.notifyDailyExecutionSummary(summary);
+      }
+
     riskEngine.resetDailyLoss();
+    executionTracker.reset();
     lastRiskResetUTCDate = currentUTCDate;
   }
 }
@@ -104,6 +105,7 @@ const btcEngine = createSymbolEngine({
   log,
   executor,
   riskEngine,
+  executionTracker,
   feedHealth,
   isTradeTimeAllowed,
 
@@ -124,6 +126,7 @@ const trxEngine = createSymbolEngine({
   log,
   executor,
   riskEngine,
+  executionTracker,
   feedHealth,
   isTradeTimeAllowed,
 
@@ -143,6 +146,18 @@ const engines = {
   BTCUSDT: btcEngine,
   SOLUSDT: trxEngine,
 };
+
+startTelegramBot({
+  token: process.env.TELEGRAM_BOT_TOKEN,
+  account,
+  executor,
+  performanceTracker,
+  feedHealth,
+  engines,
+  structureTF: "5m",
+  biasTF: "2h",
+  log,
+});
 
 startPriceStream(({ symbol, bid, ask, timestamp }) => {
   checkDailyRiskReset();

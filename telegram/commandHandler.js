@@ -20,8 +20,7 @@ function startTelegramBot({
   executor,
   performanceTracker,
   feedHealth,
-  getBias,
-  getStructure,
+  engines,
   structureTF,
   biasTF,
   log,
@@ -53,23 +52,28 @@ function startTelegramBot({
     }
   });
 
-  // /status
+  // /status (MULTI-SYMBOL)
   bot.onText(/\/status/, (msg) => {
     if (!isAuthorized(msg)) return;
 
     const chatId = msg.chat.id;
 
-    const status = `
-📊 *System Status*
-• Bias (${biasTF}): ${getBias()}
-• Structure (${structureTF}): ${getStructure()}
-• Feed: ${feedHealth.getStatus()}
-• Trading: ${tradeControl.enabled ? "ACTIVE" : "PAUSED"}
-• Open Position: ${executor.hasOpenPosition() ? "YES" : "NO"}
-• Equity: ${account.equity.toFixed(2)}
-`;
+    let text = `📊 *System Status*\n\n`;
 
-    bot.sendMessage(chatId, status);
+    for (const symbol of Object.keys(engines)) {
+      const engine = engines[symbol];
+
+      text += `*${symbol}*\n`;
+      text += `• Bias (${biasTF}): ${engine.getBias()}\n`;
+      text += `• Structure (${structureTF}): ${engine.getStructure()}\n\n`;
+    }
+
+    text += `• Feed: ${feedHealth.getStatus()}\n`;
+    text += `• Trading: ${tradeControl.enabled ? "ACTIVE" : "PAUSED"}\n`;
+    text += `• Open Position: ${executor.hasOpenPosition() ? "YES" : "NO"}\n`;
+    text += `• Equity: ${account.equity.toFixed(2)}\n`;
+
+    bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
   });
 
   // /performance
@@ -173,8 +177,70 @@ Equity: ${safeNum(summary.equity)}
     );
   });
 
-  // 🔁 EXPORT CONTROL FOR STRATEGY ENGINE
+  // =====================================================
+  // 🔔 TRADE NOTIFICATIONS (NEW — NON-BREAKING)
+  // =====================================================
+
+  function notifyTradeOpen(trade) {
+    bot.sendMessage(
+      ALLOWED_CHAT_ID,
+      `🟢 *Trade Opened*
+Symbol: ${trade.symbol}
+Side: ${trade.side}
+Entry: ${trade.entryPrice}
+SL: ${trade.stopPrice}
+TP: ${trade.takeProfitPrice}
+Size: ${trade.size.toFixed(4)}`
+    );
+  }
+
+  function notifyTradeClose(trade) {
+    bot.sendMessage(
+      ALLOWED_CHAT_ID,
+      `🔴 *Trade Closed* (${trade.reason})
+Symbol: ${trade.symbol}
+Side: ${trade.side}
+PnL: ${safeNum(trade.pnl)}
+R: ${safeNum(trade.r)}
+Duration: ${trade.durationMinutes.toFixed(1)} min
+Equity: ${safeNum(trade.equity)}`
+    );
+  }
+
+  function notifyDailyExecutionSummary(summary) {
+  if (!summary || summary.totalRejects === 0) return;
+
+  let message = `📊 *Exchange Feedback (Bybit)*\n`;
+
+  message += `Total rejects: ${summary.exchange.total}\n`;
+
+  if (summary.exchange.topIssue) {
+    const top = summary.exchange.topIssue;
+    message += `Top issue: ${top.code} - ${top.message} (${top.count}x)\n`;
+  }
+
+  if (summary.exchange.breakdown.length > 1) {
+    message += `\n*All Exchange Issues*\n`;
+    for (const e of summary.exchange.breakdown) {
+      message += `• ${e.code} - ${e.message} (${e.count}x)\n`;
+    }
+  }
+
+  if (summary.internal.total > 0) {
+    message += `\n📋 *Internal Rejections*\n`;
+    for (const i of summary.internal.breakdown) {
+      message += `• ${i.reason}: ${i.count}\n`;
+    }
+  }
+
+  bot.sendMessage(ALLOWED_CHAT_ID, message, { parse_mode: "Markdown" });
+}
+
+  // 🔁 EXPORT CONTROL + NOTIFIERS
   startTelegramBot.tradeControl = tradeControl;
+  startTelegramBot.notifyTradeOpen = notifyTradeOpen;
+  startTelegramBot.notifyTradeClose = notifyTradeClose;
+  startTelegramBot.notifyDailyExecutionSummary = notifyDailyExecutionSummary;
 }
 
 module.exports = { startTelegramBot };

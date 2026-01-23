@@ -4,6 +4,7 @@ function createSymbolEngine({
   executor,
   riskEngine,
   feedHealth,
+  executionTracker,
   isTradeTimeAllowed,
   evaluateEntry,
   evaluateStructure,
@@ -67,6 +68,7 @@ function createSymbolEngine({
       if (feedStatus === "HALT_ENTRIES") {
         if (entrySignal) {
           log(`[${symbol}] Entry blocked — feed unstable`);
+          executionTracker?.recordInternalReject("UNSTABLE_FEED");
         }
         return;
       }
@@ -91,6 +93,7 @@ function createSymbolEngine({
         !isTradeTimeAllowed()
       ) {
         log(`[${symbol}] Entry blocked — outside trading hours`);
+        executionTracker?.recordInternalReject("OUTSIDE_TRADING_HOURS");
         decision = "HOLD";
       }
 
@@ -101,6 +104,7 @@ function createSymbolEngine({
         tradeControl.enabled === false
       ) {
         log(`[${symbol}] ⏸ Entry blocked — trading paused via Telegram`);
+        executionTracker?.recordInternalReject("PAUSED_VIA_TELEGRAM");
         decision = "HOLD";
       }
 
@@ -189,6 +193,15 @@ function createSymbolEngine({
   return {
     symbol,
     onPrice,
+
+    // 🔍 READ-ONLY STATE (Telegram / diagnostics only)
+    getBias() {
+      return currentDailyBias;
+    },
+
+    getStructure() {
+      return currentStructure5m;
+    },
   };
 }
 

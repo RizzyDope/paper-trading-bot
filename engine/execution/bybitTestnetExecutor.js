@@ -6,6 +6,10 @@ function createBybitTestnetExecutor({
   riskEngine,
   performanceTracker,
   log,
+
+  executionTracker,
+  notifyTradeOpen,
+  notifyTradeClose,
 }) {
   const BASE_URL = "https://api-testnet.bybit.com";
 
@@ -25,7 +29,6 @@ function createBybitTestnetExecutor({
       .digest("hex");
   }
 
-  // 🔐 NEVER log secrets
   function sanitize(params) {
     const safe = { ...params };
     if (safe.api_key) safe.api_key = "***";
@@ -33,9 +36,6 @@ function createBybitTestnetExecutor({
     return safe;
   }
 
-  // =====================================================
-  // POST (ORDER-RELATED) REQUESTS — UNCHANGED
-  // =====================================================
   async function privateRequest(path, params) {
     const timestamp = Date.now();
 
@@ -58,6 +58,10 @@ function createBybitTestnetExecutor({
         log(`Code: ${res.data.retCode}`);
         log(`Message: ${res.data.retMsg}`);
         log(`Params: ${JSON.stringify(sanitize(payload))}`);
+        executionTracker?.recordExchangeReject(
+          res.data.retCode,
+          res.data.retMsg
+        );
         return null;
       }
 
@@ -234,22 +238,30 @@ function createBybitTestnetExecutor({
       stopPrice,
       takeProfitPrice,
       size,
-
-      // ✅ NEW (required for stats)
       openedAt: Date.now(),
       riskAmount,
     };
 
-
     log(`[EXEC] Position opened`);
+
+    // 🔔 TELEGRAM OPEN NOTIFICATION (SAFE)
+    if (notifyTradeOpen) {
+      notifyTradeOpen({
+        symbol,
+        side,
+        entryPrice,
+        stopPrice,
+        takeProfitPrice,
+        size,
+      });
+    }
   }
 
   async function closePosition(exitPrice, reason) {
     const pos = account.openPosition;
     if (!pos) return;
 
-    const durationMs = Date.now() - pos.openedAt;
-    const durationMinutes = durationMs / 60000;
+    const durationMinutes = (Date.now() - pos.openedAt) / 60000;
 
     const side = pos.side === "LONG" ? "Sell" : "Buy";
 
@@ -270,15 +282,12 @@ function createBybitTestnetExecutor({
       return;
     }
 
-    let pnl =
+    const pnl =
       pos.side === "LONG"
         ? (exitPrice - pos.entryPrice) * pos.size
         : (pos.entryPrice - exitPrice) * pos.size;
 
-        const r =
-        pos.riskAmount > 0
-          ? pnl / pos.riskAmount
-          : 0;
+    const r = pos.riskAmount > 0 ? pnl / pos.riskAmount : 0;
 
     account.equity += pnl;
 
@@ -297,9 +306,22 @@ function createBybitTestnetExecutor({
       durationMinutes,
     });
 
-    log(
-      `[EXEC] CLOSED pnl=${pnl.toFixed(2)} equity=${account.equity.toFixed(2)}`
-    );
+    log(`[EXEC] CLOSED pnl=${pnl.toFixed(2)} equity=${account.equity.toFixed(2)}`);
+
+    // 🔔 TELEGRAM CLOSE NOTIFICATION (SAFE)
+    if (notifyTradeClose) {
+      notifyTradeClose({
+        symbol: pos.symbol,
+        side: pos.side,
+        entry: pos.entryPrice,
+        exit: exitPrice,
+        pnl,
+        r,
+        reason,
+        durationMinutes,
+        equity: account.equity,
+      });
+    }
 
     account.openPosition = null;
   }
@@ -332,28 +354,17 @@ function createBybitTestnetExecutor({
     const pos = account.openPosition;
     if (!pos) return;
 
-    if (pos.side === "LONG" && bid <= pos.stopPrice) {
-      closePosition(bid, "STOP_LOSS");
-    }
-
-    if (pos.side === "SHORT" && ask >= pos.stopPrice) {
-      closePosition(ask, "STOP_LOSS");
-    }
-
-    if (pos.side === "LONG" && bid >= pos.takeProfitPrice) {
-      closePosition(bid, "TAKE_PROFIT");
-    }
-
-    if (pos.side === "SHORT" && ask <= pos.takeProfitPrice) {
-      closePosition(ask, "TAKE_PROFIT");
-    }
+    if (pos.side === "LONG" && bid <= pos.stopPrice) closePosition(bid, "STOP_LOSS");
+    if (pos.side === "SHORT" && ask >= pos.stopPrice) closePosition(ask, "STOP_LOSS");
+    if (pos.side === "LONG" && bid >= pos.takeProfitPrice) closePosition(bid, "TAKE_PROFIT");
+    if (pos.side === "SHORT" && ask <= pos.takeProfitPrice) closePosition(ask, "TAKE_PROFIT");
   }
 
   return {
     onDecision,
     onPrice,
     hasOpenPosition,
-    resyncPosition, // ✅ FIXED & WORKING
+    resyncPosition, // unchanged placeholder
   };
 }
 
