@@ -2,7 +2,7 @@ const TelegramBot = require("node-telegram-bot-api");
 
 /**
  * Telegram command handler (controlled access)
- * Supports pause/resume WITHOUT affecting open positions
+ * Stable polling version (NO Markdown fragility)
  */
 
 function safeNum(n) {
@@ -13,6 +13,17 @@ function safeNum(n) {
 const tradeControl = {
   enabled: true,
 };
+
+// 🧠 simple rate limiter (prevents 429 + deaf bot)
+let lastReplyAt = 0;
+function canReply() {
+  const now = Date.now();
+  if (now - lastReplyAt < 1500) return false;
+  lastReplyAt = now;
+  return true;
+}
+
+let botInstance = null; // 🚨 SINGLETON GUARD
 
 function startTelegramBot({
   token,
@@ -31,212 +42,227 @@ function startTelegramBot({
   }
 
   const ALLOWED_CHAT_ID = Number(process.env.TELEGRAM_ALLOWED_CHAT_ID);
-
   if (!ALLOWED_CHAT_ID) {
     log("⚠️ TELEGRAM_ALLOWED_CHAT_ID missing — bot disabled");
     return;
   }
 
-  const bot = new TelegramBot(token, { polling: true });
-
-  log("🤖 Telegram bot started (CONTROL ENABLED, restricted)");
-
-  function isAuthorized(msg) {
-    return msg.chat.id === ALLOWED_CHAT_ID;
+  // 🚫 PREVENT MULTIPLE INSTANCES
+  if (botInstance) {
+    log("⚠️ Telegram bot already running — skipping duplicate init");
+    return;
   }
 
-  // 🚨 Log unauthorized access attempts
+  const bot = new TelegramBot(token, {
+    polling: { interval: 300, autoStart: true },
+  });
+
+  botInstance = bot;
+  log("🤖 Telegram bot started (polling, single instance)");
+
+  function isAuthorized(msg) {
+    return msg.chat && msg.chat.id === ALLOWED_CHAT_ID;
+  }
+
+  // 🚨 Unauthorized access logging (quiet)
   bot.on("message", (msg) => {
     if (!isAuthorized(msg)) {
-      log(`🚫 Unauthorized Telegram access attempt from chat ${msg.chat.id}`);
+      log(`🚫 Unauthorized Telegram access from chat ${msg.chat.id}`);
     }
   });
 
-  // /status (MULTI-SYMBOL)
+  // ===========================
+  // /status
+  // ===========================
   bot.onText(/\/status/, (msg) => {
-    if (!isAuthorized(msg)) return;
+    if (!isAuthorized(msg) || !canReply()) return;
 
     const chatId = msg.chat.id;
 
-    let text = `📊 *System Status*\n\n`;
+    let text = "📊 System Status\n\n";
 
     for (const symbol of Object.keys(engines)) {
       const engine = engines[symbol];
-
-      text += `*${symbol}*\n`;
-      text += `• Bias (${biasTF}): ${engine.getBias()}\n`;
-      text += `• Structure (${structureTF}): ${engine.getStructure()}\n\n`;
+      text += `${symbol}\n`;
+      text += `Bias (${biasTF}): ${engine.getBias()}\n`;
+      text += `Structure (${structureTF}): ${engine.getStructure()}\n\n`;
     }
 
-    text += `• Feed: ${feedHealth.getStatus()}\n`;
-    text += `• Trading: ${tradeControl.enabled ? "ACTIVE" : "PAUSED"}\n`;
-    text += `• Open Position: ${executor.hasOpenPosition() ? "YES" : "NO"}\n`;
-    text += `• Equity: ${account.equity.toFixed(2)}\n`;
+    text += `Feed: ${feedHealth.getStatus()}\n`;
+    text += `Trading: ${tradeControl.enabled ? "ACTIVE" : "PAUSED"}\n`;
+    text += `Open Position: ${executor.hasOpenPosition() ? "YES" : "NO"}\n`;
+    text += `Equity: ${safeNum(account.equity)}\n`;
 
-    bot.sendMessage(chatId, text, { parse_mode: "Markdown" });
+    bot.sendMessage(chatId, text).catch(() => {});
   });
 
+  // ===========================
   // /performance
+  // ===========================
   bot.onText(/\/performance/, (msg) => {
-    if (!isAuthorized(msg)) return;
+    if (!isAuthorized(msg) || !canReply()) return;
 
     const chatId = msg.chat.id;
 
     try {
-      const summary = performanceTracker.getSummary();
+      const s = performanceTracker.getSummary();
 
-      const text = `
-📈 *Performance Summary*
+      const text =
+        "📈 Performance Summary\n\n" +
+        `Trades: ${s.totalTrades ?? 0}\n` +
+        `Wins: ${s.wins ?? 0}\n` +
+        `Losses: ${s.losses ?? 0}\n\n` +
+        `Net PnL: ${safeNum(s.netPnl)}\n` +
+        `Avg R: ${safeNum(s.avgR)}\n` +
+        `Equity: ${safeNum(s.equity)}\n`;
 
-Trades: ${summary.totalTrades ?? 0}
-Wins: ${summary.wins ?? 0}
-Losses: ${summary.losses ?? 0}
-
-Net PnL: ${safeNum(summary.netPnl)}
-Avg R: ${safeNum(summary.avgR)}
-Equity: ${safeNum(summary.equity)}
-`;
-
-      bot.sendMessage(chatId, text);
+      bot.sendMessage(chatId, text).catch(() => {});
     } catch (err) {
       log("❌ /performance error:", err.message);
-      bot.sendMessage(chatId, "⚠️ Performance data not ready yet");
+      bot.sendMessage(chatId, "⚠️ Performance data not ready").catch(() => {});
     }
   });
 
+  // ===========================
   // /position
+  // ===========================
   bot.onText(/\/position/, (msg) => {
-    if (!isAuthorized(msg)) return;
+    if (!isAuthorized(msg) || !canReply()) return;
 
     const chatId = msg.chat.id;
     const pos = account.openPosition;
 
     if (!pos) {
-      bot.sendMessage(chatId, "📍 No open position");
+      bot.sendMessage(chatId, "📍 No open position").catch(() => {});
       return;
     }
 
-    const text = `
-📍 *Open Position*
-• Side: ${pos.side}
-• Entry: ${pos.entryPrice}
-• Stop: ${pos.stopPrice}
-• Take Profit: ${pos.takeProfitPrice}
-• Size: ${pos.size.toFixed(4)}
-`;
+    const text =
+      "📍 Open Position\n" +
+      `Side: ${pos.side}\n` +
+      `Entry: ${pos.entryPrice}\n` +
+      `Stop: ${pos.stopPrice}\n` +
+      `Take Profit: ${pos.takeProfitPrice}\n` +
+      `Size: ${pos.size.toFixed(4)}\n`;
 
-    bot.sendMessage(chatId, text);
+    bot.sendMessage(chatId, text).catch(() => {});
   });
 
-  // ⏸️ /pause — stop NEW trades only
+  // ===========================
+  // /pause
+  // ===========================
   bot.onText(/\/pause/, (msg) => {
-    if (!isAuthorized(msg)) return;
+    if (!isAuthorized(msg) || !canReply()) return;
 
     const chatId = msg.chat.id;
 
     if (!tradeControl.enabled) {
-      bot.sendMessage(chatId, "⏸️ Trading is already paused");
+      bot.sendMessage(chatId, "⏸️ Trading already paused").catch(() => {});
       return;
     }
 
     tradeControl.enabled = false;
     log("⏸️ Trading PAUSED via Telegram");
-
-    bot.sendMessage(
-      chatId,
-      "⏸️ *Trading paused*\nExisting positions remain managed normally."
-    );
+    bot.sendMessage(chatId, "⏸️ Trading paused").catch(() => {});
   });
 
-  // ▶️ /resume — allow new trades
+  // ===========================
+  // /resume
+  // ===========================
   bot.onText(/\/resume/, (msg) => {
-    if (!isAuthorized(msg)) return;
+    if (!isAuthorized(msg) || !canReply()) return;
 
     const chatId = msg.chat.id;
 
     if (tradeControl.enabled) {
-      bot.sendMessage(chatId, "▶️ Trading is already active");
+      bot.sendMessage(chatId, "▶️ Trading already active").catch(() => {});
       return;
     }
 
     tradeControl.enabled = true;
     log("▶️ Trading RESUMED via Telegram");
-
-    bot.sendMessage(chatId, "▶️ *Trading resumed*");
+    bot.sendMessage(chatId, "▶️ Trading resumed").catch(() => {});
   });
 
-  // /trading — explicit check
+  // ===========================
+  // /trading
+  // ===========================
   bot.onText(/\/trading/, (msg) => {
-    if (!isAuthorized(msg)) return;
+    if (!isAuthorized(msg) || !canReply()) return;
 
     const chatId = msg.chat.id;
-
     bot.sendMessage(
       chatId,
-      `⚙️ Trading is currently *${tradeControl.enabled ? "ACTIVE" : "PAUSED"}*`
-    );
+      `⚙️ Trading is ${tradeControl.enabled ? "ACTIVE" : "PAUSED"}`
+    ).catch(() => {});
   });
 
-  // =====================================================
-  // 🔔 TRADE NOTIFICATIONS (NEW — NON-BREAKING)
-  // =====================================================
-
+  // ===========================
+  // 🔔 NOTIFICATIONS
+  // ===========================
   function notifyTradeOpen(trade) {
     bot.sendMessage(
       ALLOWED_CHAT_ID,
-      `🟢 *Trade Opened*
-Symbol: ${trade.symbol}
-Side: ${trade.side}
-Entry: ${trade.entryPrice}
-SL: ${trade.stopPrice}
-TP: ${trade.takeProfitPrice}
-Size: ${trade.size.toFixed(4)}`
-    );
+      "🟢 Trade Opened\n" +
+        `Symbol: ${trade.symbol}\n` +
+        `Side: ${trade.side}\n` +
+        `Entry: ${trade.entryPrice}\n` +
+        `SL: ${trade.stopPrice}\n` +
+        `TP: ${trade.takeProfitPrice}\n` +
+        `Size: ${trade.size.toFixed(4)}`
+    ).catch(() => {});
   }
 
   function notifyTradeClose(trade) {
     bot.sendMessage(
       ALLOWED_CHAT_ID,
-      `🔴 *Trade Closed* (${trade.reason})
-Symbol: ${trade.symbol}
-Side: ${trade.side}
-PnL: ${safeNum(trade.pnl)}
-R: ${safeNum(trade.r)}
-Duration: ${trade.durationMinutes.toFixed(1)} min
-Equity: ${safeNum(trade.equity)}`
-    );
+      "🔴 Trade Closed\n" +
+        `Symbol: ${trade.symbol}\n` +
+        `Side: ${trade.side}\n` +
+        `PnL: ${safeNum(trade.pnl)}\n` +
+        `R: ${safeNum(trade.r)}\n` +
+        `Duration: ${trade.durationMinutes.toFixed(1)} min\n` +
+        `Equity: ${safeNum(trade.equity)}`
+    ).catch(() => {});
   }
 
   function notifyDailyExecutionSummary(summary) {
-  if (!summary || summary.totalRejects === 0) return;
+  if (!summary) return;
 
-  let message = `📊 *Exchange Feedback (Bybit)*\n`;
+  let message = "📊 Exchange Feedback (Bybit)\n\n";
 
-  message += `Total rejects: ${summary.exchange.total}\n`;
+  const exchange = summary.exchange || { total: 0, breakdown: [] };
+  const internal = summary.internal || { total: 0, breakdown: [] };
 
-  if (summary.exchange.topIssue) {
-    const top = summary.exchange.topIssue;
+  message += `Total exchange rejects: ${exchange.total}\n`;
+
+  if (exchange.topIssue) {
+    const top = exchange.topIssue;
     message += `Top issue: ${top.code} - ${top.message} (${top.count}x)\n`;
   }
 
-  if (summary.exchange.breakdown.length > 1) {
-    message += `\n*All Exchange Issues*\n`;
-    for (const e of summary.exchange.breakdown) {
-      message += `• ${e.code} - ${e.message} (${e.count}x)\n`;
+  if (exchange.breakdown && exchange.breakdown.length > 0) {
+    message += "\nAll Exchange Issues:\n";
+    for (const e of exchange.breakdown) {
+      message += `- ${e.code}: ${e.message} (${e.count}x)\n`;
     }
   }
 
-  if (summary.internal.total > 0) {
-    message += `\n📋 *Internal Rejections*\n`;
-    for (const i of summary.internal.breakdown) {
-      message += `• ${i.reason}: ${i.count}\n`;
+  if (internal.total > 0) {
+    message += "\nInternal Rejections:\n";
+    for (const i of internal.breakdown) {
+      message += `- ${i.reason}: ${i.count}\n`;
     }
   }
 
-  bot.sendMessage(ALLOWED_CHAT_ID, message, { parse_mode: "Markdown" });
+  if (exchange.total === 0 && internal.total === 0) {
+    message += "\nNo rejects today. Clean execution.\n";
+  }
+
+  bot.sendMessage(ALLOWED_CHAT_ID, message).catch(() => {});
 }
 
-  // 🔁 EXPORT CONTROL + NOTIFIERS
+  // 🔁 EXPORT HOOKS
   startTelegramBot.tradeControl = tradeControl;
   startTelegramBot.notifyTradeOpen = notifyTradeOpen;
   startTelegramBot.notifyTradeClose = notifyTradeClose;
