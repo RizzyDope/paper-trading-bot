@@ -42,6 +42,7 @@ function createBybitTestnetExecutor({
     const payload = {
       ...params,
       api_key: process.env.BYBIT_TESTNET_API_KEY,
+      recvWindow: 5000,
       timestamp,
     };
 
