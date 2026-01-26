@@ -136,29 +136,57 @@ function createBybitTestnetExecutor({
     }
   }
 
-  async function forceOpenTestPosition() {
-    log("🧪 FORCE TEST: opening manual LONG on BTCUSDT");
+  // =====================================================
+// ⚙️ ENSURE LEVERAGE (REQUIRED FOR UNIFIED ACCOUNT)
+// =====================================================
+async function ensureLeverage(symbol, leverage = "10") {
+  const res = await privateRequest("/v5/position/set-leverage", {
+    category: "linear",
+    symbol,
+    buyLeverage: leverage,
+    sellLeverage: leverage,
+  });
 
-    const body = {
-      category: "linear",
-      symbol: "BTCUSDT",
-      side: "Buy",
-      orderType: "Market",
-      qty: "0.001", // small, safe test size
-      timeInForce: "IOC",
-    };
-
-    const res = await privateRequest("/v5/order/create", body);
-
-    if (!res) {
-      log("❌ FORCE TEST FAILED");
-      return;
-    }
-
-    log("✅ FORCE TEST SUCCESS — ORDER ACCEPTED");
-    log(JSON.stringify(res.result, null, 2));
+  // retCode 110043 = leverage already set → SAFE
+  if (!res) {
+    log(`⚠️ Could not confirm leverage for ${symbol} (may already be set)`);
+    return;
   }
 
+  log(`⚙️ Leverage ensured for ${symbol}: ${leverage}x`);
+}
+
+// =====================================================
+// 🧪 FORCE OPEN TEST POSITION (MARKET ORDER)
+// =====================================================
+async function forceOpenTestPosition() {
+  const SYMBOL = "BTCUSDT";
+
+  log(`🧪 FORCE TEST: opening manual LONG on ${SYMBOL}`);
+
+  // 1️⃣ Ensure leverage FIRST
+  await ensureLeverage(SYMBOL, "10");
+
+  // 2️⃣ Place minimal market order
+  const body = {
+    category: "linear",
+    symbol: SYMBOL,
+    side: "Buy",
+    orderType: "Market",
+    qty: "0.001", // minimal BTC test size
+    timeInForce: "IOC",
+  };
+
+  const res = await privateRequest("/v5/order/create", body);
+
+  if (!res) {
+    log("❌ FORCE TEST FAILED — order rejected");
+    return;
+  }
+
+  log("✅ FORCE TEST SUCCESS — ORDER ACCEPTED");
+  log(JSON.stringify(res.result, null, 2));
+}
   // =====================================================
   // 🔎 RESYNC — FIXED (GET, NOT POST)
   // =====================================================
