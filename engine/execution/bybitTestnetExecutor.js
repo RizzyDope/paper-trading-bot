@@ -139,77 +139,24 @@ function createBybitTestnetExecutor({
   async function forceOpenTestPosition() {
     log("🧪 FORCE TEST: opening manual LONG on SOLUSDT");
 
-    const SYMBOL = "SOLUSDT";
-    const QTY = "0.1";
-    const LEVERAGE = "10";
-    const MIN_REQUIRED_MARGIN = 5; // USDT safety buffer
+    const body = {
+      category: "linear",
+      symbol: "BTCUSDT",
+      side: "Buy",
+      orderType: "Market",
+      qty: "0.001", // small, safe test size
+      timeInForce: "IOC",
+    };
 
-    try {
-      // ─────────────────────────────
-      // Step 1: Ensure leverage is set
-      // ─────────────────────────────
-      await privateRequest("/v5/position/set-leverage", {
-        category: "linear",
-        symbol: SYMBOL,
-        buyLeverage: LEVERAGE,
-        sellLeverage: LEVERAGE,
-      });
+    const res = await privateRequest("/v5/order/create", body);
 
-      log(`⚙️ Leverage ensured: ${LEVERAGE}x`);
-
-      // ─────────────────────────────
-      // Step 2: Fetch available balance
-      // ─────────────────────────────
-      const balanceRes = await privateRequest("/v5/account/wallet-balance", {
-        accountType: "UNIFIED",
-        coin: "USDT",
-      });
-
-      if (!balanceRes) {
-        log("❌ FORCE TEST FAILED — could not fetch balance");
-        return;
-      }
-
-      const wallet =
-        balanceRes.result.list[0].coin.find(c => c.coin === "USDT");
-
-      const availableBalance = Number(wallet.availableBalance);
-
-      log(`💰 Available USDT: ${availableBalance}`);
-
-      // ─────────────────────────────
-      // Step 3: Pre-flight margin check
-      // ─────────────────────────────
-      if (availableBalance < MIN_REQUIRED_MARGIN) {
-        log("❌ FORCE TEST FAILED — insufficient margin");
-        return;
-      }
-
-      // ─────────────────────────────
-      // Step 4: Place market order
-      // ─────────────────────────────
-      const orderBody = {
-        category: "linear",
-        symbol: SYMBOL,
-        side: "Buy",
-        orderType: "Market",
-        qty: QTY,
-      };
-
-      const res = await privateRequest("/v5/order/create", orderBody);
-
-      if (!res) {
-        log("❌ FORCE TEST FAILED — order rejected");
-        return;
-      }
-
-      log("✅ FORCE TEST SUCCESS — ORDER ACCEPTED");
-      log(JSON.stringify(res.result, null, 2));
-
-    } catch (err) {
-      log("❌ FORCE TEST ERROR");
-      log(err?.message || err);
+    if (!res) {
+      log("❌ FORCE TEST FAILED");
+      return;
     }
+
+    log("✅ FORCE TEST SUCCESS — ORDER ACCEPTED");
+    log(JSON.stringify(res.result, null, 2));
   }
 
   // =====================================================
