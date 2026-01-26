@@ -137,7 +137,7 @@ function createBybitTestnetExecutor({
   }
 
   async function forceOpenTestPosition() {
-    log("🧪 FORCE TEST: opening manual LONG on SOLUSDT");
+    log("🧪 FORCE TEST: opening manual LONG on BTCUSDT");
 
     const body = {
       category: "linear",
