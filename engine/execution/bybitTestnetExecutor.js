@@ -144,7 +144,7 @@ function createBybitTestnetExecutor({
       symbol: "SOLUSDT",
       side: "Buy",
       orderType: "Market",
-      qty: "1", // small, safe test size
+      qty: "0.1", // small, safe test size
       timeInForce: "IOC",
     };
 
