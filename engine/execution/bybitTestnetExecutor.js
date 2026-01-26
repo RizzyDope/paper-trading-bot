@@ -17,17 +17,19 @@ function createBybitTestnetExecutor({
   // SIGNING HELPERS
   // =====================================================
 
-  function sign(params, secret) {
-    const ordered = Object.keys(params)
-      .sort()
-      .map((k) => `${k}=${params[k]}`)
-      .join("&");
+  function signPost(body, timestamp, recvWindow, secret) {
+  const payload =
+    timestamp +
+    process.env.BYBIT_TESTNET_API_KEY +
+    recvWindow +
+    JSON.stringify(body);
 
-    return crypto
-      .createHmac("sha256", secret)
-      .update(ordered)
-      .digest("hex");
-  }
+  return crypto
+    .createHmac("sha256", secret)
+    .update(payload)
+    .digest("hex");
+}
+
 
   function sanitize(params) {
     const safe = { ...params };
@@ -36,20 +38,26 @@ function createBybitTestnetExecutor({
     return safe;
   }
 
-  async function privateRequest(path, params) {
-    const timestamp = Date.now();
+  async function privateRequest(path, body) {
+    const timestamp = Date.now().toString();
+    const recvWindow = "5000";
 
-    const payload = {
-      ...params,
-      api_key: process.env.BYBIT_TESTNET_API_KEY,
-      recvWindow: 5000,
+    const signature = signPost(
+      body,
       timestamp,
-    };
-
-    payload.sign = sign(payload, process.env.BYBIT_TESTNET_API_SECRET);
+      recvWindow,
+      process.env.BYBIT_TESTNET_API_SECRET
+    );
 
     try {
-      const res = await axios.post(`${BASE_URL}${path}`, payload, {
+      const res = await axios.post(`${BASE_URL}${path}`, body, {
+        headers: {
+          "X-BAPI-API-KEY": process.env.BYBIT_TESTNET_API_KEY,
+          "X-BAPI-SIGN": signature,
+          "X-BAPI-TIMESTAMP": timestamp,
+          "X-BAPI-RECV-WINDOW": recvWindow,
+          "Content-Type": "application/json",
+        },
         timeout: 10_000,
       });
 
@@ -58,7 +66,6 @@ function createBybitTestnetExecutor({
         log(`Path: ${path}`);
         log(`Code: ${res.data.retCode}`);
         log(`Message: ${res.data.retMsg}`);
-        log(`Params: ${JSON.stringify(sanitize(payload))}`);
         executionTracker?.recordExchangeReject(
           res.data.retCode,
           res.data.retMsg
@@ -70,17 +77,10 @@ function createBybitTestnetExecutor({
     } catch (err) {
       log("💥 BYBIT REQUEST FAILED");
       log(`Path: ${path}`);
-      log(`Error: ${err.message}`);
-
-      if (err.response) {
-        log(`HTTP ${err.response.status}`);
-        log(`Response: ${JSON.stringify(err.response.data)}`);
-      }
-
+      log(err.message);
       return null;
     }
   }
-
   // =====================================================
   // GET REQUESTS (REQUIRED FOR RESYNC) — NEW & JUSTIFIED
   // =====================================================
@@ -134,6 +134,29 @@ function createBybitTestnetExecutor({
       log(`Error: ${err.message}`);
       return null;
     }
+  }
+
+  async function forceOpenTestPosition() {
+    log("🧪 FORCE TEST: opening manual LONG on SOLUSDT");
+
+    const body = {
+      category: "linear",
+      symbol: "SOLUSDT",
+      side: "Buy",
+      orderType: "Market",
+      qty: "1", // small, safe test size
+      timeInForce: "IOC",
+    };
+
+    const res = await privateRequest("/v5/order/create", body);
+
+    if (!res) {
+      log("❌ FORCE TEST FAILED");
+      return;
+    }
+
+    log("✅ FORCE TEST SUCCESS — ORDER ACCEPTED");
+    log(JSON.stringify(res.result, null, 2));
   }
 
   // =====================================================
@@ -366,6 +389,8 @@ function createBybitTestnetExecutor({
     onPrice,
     hasOpenPosition,
     resyncPosition, // unchanged placeholder
+
+    forceOpenTestPosition,
   };
 }
 

@@ -24,6 +24,10 @@ setInterval(() => {
   log("💓 system heartbeat");
 }, 60_000);
 
+setTimeout(() => {
+  executor.forceOpenTestPosition();
+}, 60_000);
+
 function isTradeTimeAllowed() {
   const now = new Date();
   const minutes = now.getUTCHours() * 60 + now.getUTCMinutes();
