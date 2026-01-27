@@ -56,13 +56,18 @@ function createBinanceTestnetExecutor({
       return res.data;
     } catch (err) {
       log("❌ BINANCE API ERROR");
-        log(`Path: ${path}`);
+      log(`Path: ${path}`);
 
-        if (err.response && err.response.data) {
+      if (err.response && err.response.data) {
         log(JSON.stringify(err.response.data, null, 2));
-        } else {
+        executionTracker?.recordExchangeReject(
+          err.response.data.code,
+          err.response.data.msg
+        );
+      } else {
         log(err.message);
-        }
+      }
+
       return null;
     }
   }
@@ -123,9 +128,10 @@ function createBinanceTestnetExecutor({
   }
 
   // =====================================================
-  // 🧪 FORCE OPEN TEST POSITION
+  // 🧪 FORCE OPEN TEST POSITION (COMMENTED — KEEP FOR DEBUG)
   // =====================================================
 
+  /*
   async function forceOpenTestPosition() {
     const SYMBOL = "BTCUSDT";
 
@@ -138,6 +144,7 @@ function createBinanceTestnetExecutor({
       side: "BUY",
       type: "MARKET",
       quantity: "0.003",
+      positionSide: "BOTH",
     });
 
     if (!res) {
@@ -148,9 +155,10 @@ function createBinanceTestnetExecutor({
     log("✅ FORCE TEST SUCCESS — ORDER ACCEPTED");
     log(JSON.stringify(res, null, 2));
   }
+  */
 
   // =====================================================
-  // 🔎 RESYNC
+  // 🔎 RESYNC — GET LIVE POSITION
   // =====================================================
 
   async function fetchOpenPosition(symbol) {
@@ -192,7 +200,7 @@ function createBinanceTestnetExecutor({
   }
 
   // =====================================================
-  // CORE TRADING LOGIC (UNCHANGED)
+  // CORE TRADING LOGIC — MIRRORS BYBIT
   // =====================================================
 
   function hasOpenPosition() {
@@ -211,6 +219,8 @@ function createBinanceTestnetExecutor({
       return;
     }
 
+    await ensureLeverage(symbol, 10);
+
     const orderSide = side === "LONG" ? "BUY" : "SELL";
 
     log(`[EXEC] Opening ${side} ${symbol} size=${size.toFixed(3)}`);
@@ -220,6 +230,7 @@ function createBinanceTestnetExecutor({
       side: orderSide,
       type: "MARKET",
       quantity: size.toFixed(3),
+      positionSide: "BOTH",
     });
 
     if (!res) {
@@ -246,7 +257,7 @@ function createBinanceTestnetExecutor({
       riskAmount,
     };
 
-    log(`[EXEC] Position opened`);
+    log("[EXEC] Position opened");
 
     notifyTradeOpen?.({
       symbol,
@@ -262,6 +273,7 @@ function createBinanceTestnetExecutor({
     const pos = account.openPosition;
     if (!pos) return;
 
+    const durationMinutes = (Date.now() - pos.openedAt) / 60000;
     const side = pos.side === "LONG" ? "SELL" : "BUY";
 
     log(`[EXEC] Closing position (${reason})`);
@@ -272,10 +284,11 @@ function createBinanceTestnetExecutor({
       type: "MARKET",
       quantity: pos.size.toFixed(3),
       reduceOnly: true,
+      positionSide: "BOTH",
     });
 
     if (!res) {
-      log("⚠️ Close order failed");
+      log("⚠️ Close order failed — position state unchanged");
       return;
     }
 
@@ -284,15 +297,26 @@ function createBinanceTestnetExecutor({
         ? (exitPrice - pos.entryPrice) * pos.size
         : (pos.entryPrice - exitPrice) * pos.size;
 
+    const r = pos.riskAmount > 0 ? pnl / pos.riskAmount : 0;
+
     account.equity += pnl;
+
+    if (pnl < 0) {
+      riskEngine.registerLoss(Math.abs(pnl));
+    }
 
     performanceTracker.recordTrade({
       side: pos.side,
       entry: pos.entryPrice,
       exit: exitPrice,
       pnl,
+      r,
+      result: pnl > 0 ? "WIN" : "LOSS",
       reason,
+      durationMinutes,
     });
+
+    log(`[EXEC] CLOSED pnl=${pnl.toFixed(2)} equity=${account.equity.toFixed(2)}`);
 
     notifyTradeClose?.({
       symbol: pos.symbol,
@@ -300,7 +324,9 @@ function createBinanceTestnetExecutor({
       entry: pos.entryPrice,
       exit: exitPrice,
       pnl,
+      r,
       reason,
+      durationMinutes,
       equity: account.equity,
     });
 
@@ -353,7 +379,7 @@ function createBinanceTestnetExecutor({
     onPrice,
     hasOpenPosition,
     resyncPosition,
-    forceOpenTestPosition,
+    // forceOpenTestPosition, // intentionally commented
   };
 }
 
