@@ -11,7 +11,7 @@ const { evaluateEntry } = require("./engine/strategy/entryEvaluator");
 const { decide } = require("./engine/strategy/decisionEngine");
 const { createRiskEngine } = require("./engine/risk/riskEngine");
 const { calculateATR } = require("./engine/risk/atr");
-const { createBybitTestnetExecutor } = require("./engine/execution/bybitTestnetExecutor");
+const { createBinanceTestnetExecutor } = require("./engine/execution/binanceTestnetExecutor");
 const { createExecutionTracker } = require("./engine/execution/executionTracker");
 const { createPerformanceTracker } = require("./stats/performanceTracker");
 const { createCandleStore } = require("./storage/stateStore");
@@ -60,7 +60,7 @@ const performanceTracker = createPerformanceTracker({
 
 const executionTracker = createExecutionTracker();
 
-const executor = createBybitTestnetExecutor({
+const executor = createBinanceTestnetExecutor({
   account,
   riskEngine,
   performanceTracker,
