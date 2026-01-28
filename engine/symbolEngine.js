@@ -110,7 +110,7 @@ function createSymbolEngine({
 
       log(`[${symbol}] decision: ${decision}`);
 
-      executor.onDecision(decision, candle.close, atr);
+      executor.onDecision(decision, candle.close, atr, symbol);
     },
 
     // -----------------------------
