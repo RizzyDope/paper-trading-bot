@@ -226,6 +226,13 @@ function startTelegramBot({
     ).catch(() => {});
   }
 
+  function notifySystemAlert(message) {
+  bot.sendMessage(
+    ALLOWED_CHAT_ID,
+    "🚨 SYSTEM ALERT\n" + message
+  ).catch(() => {});
+}
+
   function notifyDailyExecutionSummary(summary) {
   if (!summary) return;
 
@@ -267,6 +274,7 @@ function startTelegramBot({
   startTelegramBot.notifyTradeOpen = notifyTradeOpen;
   startTelegramBot.notifyTradeClose = notifyTradeClose;
   startTelegramBot.notifyDailyExecutionSummary = notifyDailyExecutionSummary;
+  startTelegramBot.notifySystemAlert = notifySystemAlert;
 }
 
 module.exports = { startTelegramBot };

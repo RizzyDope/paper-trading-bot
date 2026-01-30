@@ -59,10 +59,18 @@ function createBinanceTestnetExecutor({
       log(`Path: ${path}`);
 
       if (err.response && err.response.data) {
+        const { code, msg } = err.response.data;
+
         log(JSON.stringify(err.response.data, null, 2));
-        executionTracker?.recordExchangeReject(
-          err.response.data.code,
-          err.response.data.msg
+
+        executionTracker?.recordExchangeReject(code, msg);
+
+        notifySystemAlert?.(
+          `Exchange rejected request\n` +
+          `Path: ${path}\n` +
+          `Symbol: ${params?.symbol || "UNKNOWN"}\n` +
+          `Code: ${code}\n` +
+          `Message: ${msg}`
         );
       } else {
         log(err.message);
@@ -208,14 +216,23 @@ function createBinanceTestnetExecutor({
   }
 
   async function openPosition({ symbol, side, entryPrice, stopPrice }) {
-    const size = riskEngine.calculatePositionSize({
+    const rawSize = riskEngine.calculatePositionSize({
       entryPrice,
       stopPrice,
       equity: account.equity,
     });
 
-    if (size <= 0) {
-      log("❌ Position size zero — skipped");
+    // Binance BTCUSDT minimum quantity
+    const MIN_QTY = 0.001;
+
+    // round DOWN to nearest valid step
+    const size = Math.floor(rawSize / MIN_QTY) * MIN_QTY;
+
+    if (size < MIN_QTY) {
+      log(
+        `[EXEC] ❌ Size too small for ${symbol} (raw=${rawSize.toFixed(6)}) — skipped`
+      );
+      executionTracker?.recordInternalReject("SIZE_TOO_SMALL");
       return;
     }
 
