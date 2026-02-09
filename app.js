@@ -159,7 +159,7 @@ startTelegramBot({
   feedHealth,
   engines,
   structureTF: "5m",
-  biasTF: "2h",
+  biasTF: "4h",
   log,
 });
 

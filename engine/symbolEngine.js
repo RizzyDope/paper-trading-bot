@@ -30,7 +30,7 @@ function createSymbolEngine({
 
   const store1m = createCandleStore(200);
   const store5m = createCandleStore(200);
-  const store2h = createCandleStore(200);
+  const store4h = createCandleStore(200);
 
   // -----------------------------
   // 1m CANDLE (ENTRIES)
@@ -164,18 +164,18 @@ function createSymbolEngine({
   });
 
   // -----------------------------
-  // 2h DAILY BIAS
+  // 4h DAILY BIAS
   // -----------------------------
-  const candle2h = createCandleBuilder(2 * 60 * 60_000, (candle) => {
-    store2h.addCandle(candle);
-    log(`[${symbol}] 2h candle stored (${store2h.getCandles().length})`);
+  const candle4h = createCandleBuilder(4 * 60 * 60_000, (candle) => {
+    store4h.addCandle(candle);
+    log(`[${symbol}] 4h candle stored (${store4h.getCandles().length})`);
 
-    const candles = store2h.getCandles();
+    const candles = store4h.getCandles();
     const newBias = evaluateDailyBias(candles);
 
     if (newBias !== currentDailyBias) {
       log(
-        `[${symbol}] (2H) bias changed: ${currentDailyBias} → ${newBias}`
+        `[${symbol}] (4H) bias changed: ${currentDailyBias} → ${newBias}`
       );
       currentDailyBias = newBias;
     }
@@ -187,7 +187,7 @@ function createSymbolEngine({
   function onPrice(price, timestamp) {
     candle1m.onPrice(price, timestamp);
     candle5m.onPrice(price, timestamp);
-    candle2h.onPrice(price, timestamp);
+    candle4h.onPrice(price, timestamp);
   }
 
   return {
