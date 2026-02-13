@@ -6,10 +6,10 @@ function createBinanceTestnetExecutor({
   riskEngine,
   performanceTracker,
   log,
-
   executionTracker,
   notifyTradeOpen,
   notifyTradeClose,
+  notifySystemAlert, // ✅ kept intact
 }) {
   const BASE_URL = "https://testnet.binancefuture.com";
 
@@ -62,15 +62,14 @@ function createBinanceTestnetExecutor({
         const { code, msg } = err.response.data;
 
         log(JSON.stringify(err.response.data, null, 2));
-
         executionTracker?.recordExchangeReject(code, msg);
 
         notifySystemAlert?.(
           `Exchange rejected request\n` +
-          `Path: ${path}\n` +
-          `Symbol: ${params?.symbol || "UNKNOWN"}\n` +
-          `Code: ${code}\n` +
-          `Message: ${msg}`
+            `Path: ${path}\n` +
+            `Symbol: ${params?.symbol || "UNKNOWN"}\n` +
+            `Code: ${code}\n` +
+            `Message: ${msg}`
         );
       } else {
         log(err.message);
@@ -81,7 +80,7 @@ function createBinanceTestnetExecutor({
   }
 
   // =====================================================
-  // PRIVATE GET
+  // PRIVATE GET (UNCHANGED)
   // =====================================================
 
   async function privateGet(path, params) {
@@ -118,7 +117,7 @@ function createBinanceTestnetExecutor({
   }
 
   // =====================================================
-  // ⚙️ ENSURE LEVERAGE
+  // ENSURE LEVERAGE (UNCHANGED)
   // =====================================================
 
   async function ensureLeverage(symbol, leverage = 10) {
@@ -136,42 +135,11 @@ function createBinanceTestnetExecutor({
   }
 
   // =====================================================
-  // 🧪 FORCE OPEN TEST POSITION (COMMENTED — KEEP FOR DEBUG)
-  // =====================================================
-
-  /*
-  async function forceOpenTestPosition() {
-    const SYMBOL = "BTCUSDT";
-
-    log(`🧪 FORCE TEST: opening manual LONG on ${SYMBOL}`);
-
-    await ensureLeverage(SYMBOL, 10);
-
-    const res = await privateRequest("/fapi/v1/order", {
-      symbol: SYMBOL,
-      side: "BUY",
-      type: "MARKET",
-      quantity: "0.003",
-      positionSide: "BOTH",
-    });
-
-    if (!res) {
-      log("❌ FORCE TEST FAILED — order rejected");
-      return;
-    }
-
-    log("✅ FORCE TEST SUCCESS — ORDER ACCEPTED");
-    log(JSON.stringify(res, null, 2));
-  }
-  */
-
-  // =====================================================
-  // 🔎 RESYNC — GET LIVE POSITION
+  // POSITION RESYNC (UNCHANGED)
   // =====================================================
 
   async function fetchOpenPosition(symbol) {
     const res = await privateGet("/fapi/v2/positionRisk", { symbol });
-
     if (!res || !Array.isArray(res)) return null;
 
     const pos = res.find(p => Number(p.positionAmt) !== 0);
@@ -187,7 +155,6 @@ function createBinanceTestnetExecutor({
 
   async function resyncPosition(symbol) {
     log(`[RESYNC] Checking live position for ${symbol}`);
-
     const livePos = await fetchOpenPosition(symbol);
 
     if (!livePos) {
@@ -208,7 +175,7 @@ function createBinanceTestnetExecutor({
   }
 
   // =====================================================
-  // CORE TRADING LOGIC — MIRRORS BYBIT
+  // CORE LOGIC
   // =====================================================
 
   function hasOpenPosition() {
@@ -216,16 +183,19 @@ function createBinanceTestnetExecutor({
   }
 
   async function openPosition({ symbol, side, entryPrice, stopPrice }) {
+    // ✅ HARD CAPITAL CHECK
+    if (!riskEngine.canTakeTrade()) {
+      log("[EXEC] ❌ Trade blocked — risk engine disallowed");
+      executionTracker?.recordInternalReject("RISK_BLOCKED");
+      return;
+    }
+
     const rawSize = riskEngine.calculatePositionSize({
       entryPrice,
       stopPrice,
-      equity: account.equity,
     });
 
-    // Binance BTCUSDT minimum quantity
     const MIN_QTY = 0.001;
-
-    // round DOWN to nearest valid step
     const size = Math.floor(rawSize / MIN_QTY) * MIN_QTY;
 
     if (size < MIN_QTY) {
@@ -290,10 +260,9 @@ function createBinanceTestnetExecutor({
     const pos = account.openPosition;
     if (!pos) return;
 
-    const durationMinutes = (Date.now() - pos.openedAt) / 60000;
-    const side = pos.side === "LONG" ? "SELL" : "BUY";
-
     log(`[EXEC] Closing position (${reason})`);
+
+    const side = pos.side === "LONG" ? "SELL" : "BUY";
 
     const res = await privateRequest("/fapi/v1/order", {
       symbol: pos.symbol,
@@ -314,13 +283,13 @@ function createBinanceTestnetExecutor({
         ? (exitPrice - pos.entryPrice) * pos.size
         : (pos.entryPrice - exitPrice) * pos.size;
 
+    // ✅ CAPITAL AUTHORITY HANDOFF
+    riskEngine.updateAfterTrade(pnl);
+
+    // sync for external readers (telegram etc)
+    account.equity = riskEngine.getEquity();
+
     const r = pos.riskAmount > 0 ? pnl / pos.riskAmount : 0;
-
-    account.equity += pnl;
-
-    if (pnl < 0) {
-      riskEngine.registerLoss(Math.abs(pnl));
-    }
 
     performanceTracker.recordTrade({
       side: pos.side,
@@ -330,10 +299,12 @@ function createBinanceTestnetExecutor({
       r,
       result: pnl > 0 ? "WIN" : "LOSS",
       reason,
-      durationMinutes,
+      durationMinutes: (Date.now() - pos.openedAt) / 60000,
     });
 
-    log(`[EXEC] CLOSED pnl=${pnl.toFixed(2)} equity=${account.equity.toFixed(2)}`);
+    log(
+      `[EXEC] CLOSED pnl=${pnl.toFixed(2)} equity=${account.equity.toFixed(2)}`
+    );
 
     notifyTradeClose?.({
       symbol: pos.symbol,
@@ -343,7 +314,6 @@ function createBinanceTestnetExecutor({
       pnl,
       r,
       reason,
-      durationMinutes,
       equity: account.equity,
     });
 
@@ -396,7 +366,6 @@ function createBinanceTestnetExecutor({
     onPrice,
     hasOpenPosition,
     resyncPosition,
-    // forceOpenTestPosition, // intentionally commented
   };
 }
 

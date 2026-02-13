@@ -10,7 +10,7 @@ function evaluateStructure(candles, atr) {
   const c3 = closed[closed.length - 1];
 
   const MIN_BODY_ATR = 0.25;
-  const MIN_RANGE_ATR = 0.6;
+  const MIN_RANGE_ATR = 0.45;
 
   function isStrong(c) {
     const body = Math.abs(c.close - c.open);

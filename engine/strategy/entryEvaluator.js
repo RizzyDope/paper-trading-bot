@@ -8,8 +8,8 @@ function evaluateEntry(candles, bias, structure, atr) {
   const c3 = candles[candles.length - 1];
 
   // 1m tuning
-  const PULLBACK_ATR = 0.3;
-  const RECLAIM_ATR = 0.2;
+  const PULLBACK_ATR = 0.2;
+  const RECLAIM_ATR = 0.12;
 
   // -----------------------
   // BULLISH ENTRY
