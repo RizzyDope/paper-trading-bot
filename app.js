@@ -68,6 +68,7 @@ const executor = createBinanceTestnetExecutor({
   log,
   notifyTradeOpen: startTelegramBot.notifyTradeOpen,
   notifyTradeClose: startTelegramBot.notifyTradeClose,
+  notifySystemAlert: startTelegramBot.notifySystemAlert,
 });
 
 /* ======================================================

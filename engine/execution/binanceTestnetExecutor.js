@@ -13,6 +13,9 @@ function createBinanceTestnetExecutor({
 }) {
   const BASE_URL = "https://testnet.binancefuture.com";
 
+  // ✅ Symbol precision cache
+  const symbolPrecisionCache = {};
+
   // =====================================================
   // SIGNING HELPERS
   // =====================================================
@@ -117,6 +120,37 @@ function createBinanceTestnetExecutor({
   }
 
   // =====================================================
+  // ✅ PRECISION FETCH (NEW — ONLY ADDITION)
+  // =====================================================
+
+  async function getSymbolStepSize(symbol) {
+    if (symbolPrecisionCache[symbol]) {
+      return symbolPrecisionCache[symbol];
+    }
+
+    const exchangeInfo = await privateGet("/fapi/v1/exchangeInfo", {});
+    if (!exchangeInfo) return null;
+
+    const symbolInfo = exchangeInfo.symbols.find(
+      (s) => s.symbol === symbol
+    );
+
+    if (!symbolInfo) return null;
+
+    const lotFilter = symbolInfo.filters.find(
+      (f) => f.filterType === "LOT_SIZE"
+    );
+
+    if (!lotFilter) return null;
+
+    const stepSize = parseFloat(lotFilter.stepSize);
+
+    symbolPrecisionCache[symbol] = stepSize;
+
+    return stepSize;
+  }
+
+  // =====================================================
   // ENSURE LEVERAGE (UNCHANGED)
   // =====================================================
 
@@ -142,7 +176,7 @@ function createBinanceTestnetExecutor({
     const res = await privateGet("/fapi/v2/positionRisk", { symbol });
     if (!res || !Array.isArray(res)) return null;
 
-    const pos = res.find(p => Number(p.positionAmt) !== 0);
+    const pos = res.find((p) => Number(p.positionAmt) !== 0);
     if (!pos) return null;
 
     return {
@@ -183,7 +217,6 @@ function createBinanceTestnetExecutor({
   }
 
   async function openPosition({ symbol, side, entryPrice, stopPrice }) {
-    // ✅ HARD CAPITAL CHECK
     if (!riskEngine.canTakeTrade()) {
       log("[EXEC] ❌ Trade blocked — risk engine disallowed");
       executionTracker?.recordInternalReject("RISK_BLOCKED");
@@ -195,28 +228,39 @@ function createBinanceTestnetExecutor({
       stopPrice,
     });
 
-    const MIN_QTY = 0.001;
-    const size = Math.floor(rawSize / MIN_QTY) * MIN_QTY;
+    // ✅ NEW — Dynamic precision handling
+    const stepSize = await getSymbolStepSize(symbol);
+    if (!stepSize) {
+      log(`[EXEC] ❌ Could not fetch precision for ${symbol}`);
+      return;
+    }
 
-    if (size < MIN_QTY) {
+    const size = Math.floor(rawSize / stepSize) * stepSize;
+
+    if (size <= 0) {
       log(
-        `[EXEC] ❌ Size too small for ${symbol} (raw=${rawSize.toFixed(6)}) — skipped`
+        `[EXEC] ❌ Size too small for ${symbol} (raw=${rawSize.toFixed(
+          6
+        )}) — skipped`
       );
       executionTracker?.recordInternalReject("SIZE_TOO_SMALL");
       return;
     }
 
+    const decimals = Math.max(0, Math.round(-Math.log10(stepSize)));
+    const formattedSize = size.toFixed(decimals);
+
     await ensureLeverage(symbol, 10);
 
     const orderSide = side === "LONG" ? "BUY" : "SELL";
 
-    log(`[EXEC] Opening ${side} ${symbol} size=${size.toFixed(3)}`);
+    log(`[EXEC] Opening ${side} ${symbol} size=${formattedSize}`);
 
     const res = await privateRequest("/fapi/v1/order", {
       symbol,
       side: orderSide,
       type: "MARKET",
-      quantity: size.toFixed(3),
+      quantity: formattedSize,
       positionSide: "BOTH",
     });
 
@@ -226,7 +270,7 @@ function createBinanceTestnetExecutor({
     }
 
     const riskPerUnit = Math.abs(entryPrice - stopPrice);
-    const riskAmount = riskPerUnit * size;
+    const riskAmount = riskPerUnit * parseFloat(formattedSize);
 
     const takeProfitPrice =
       side === "LONG"
@@ -239,7 +283,7 @@ function createBinanceTestnetExecutor({
       entryPrice,
       stopPrice,
       takeProfitPrice,
-      size,
+      size: parseFloat(formattedSize),
       openedAt: Date.now(),
       riskAmount,
     };
@@ -252,7 +296,7 @@ function createBinanceTestnetExecutor({
       entryPrice,
       stopPrice,
       takeProfitPrice,
-      size,
+      size: parseFloat(formattedSize),
     });
   }
 
@@ -268,7 +312,7 @@ function createBinanceTestnetExecutor({
       symbol: pos.symbol,
       side,
       type: "MARKET",
-      quantity: pos.size.toFixed(3),
+      quantity: pos.size.toString(),
       reduceOnly: true,
       positionSide: "BOTH",
     });
@@ -283,10 +327,7 @@ function createBinanceTestnetExecutor({
         ? (exitPrice - pos.entryPrice) * pos.size
         : (pos.entryPrice - exitPrice) * pos.size;
 
-    // ✅ CAPITAL AUTHORITY HANDOFF
     riskEngine.updateAfterTrade(pnl);
-
-    // sync for external readers (telegram etc)
     account.equity = riskEngine.getEquity();
 
     const r = pos.riskAmount > 0 ? pnl / pos.riskAmount : 0;
@@ -303,7 +344,9 @@ function createBinanceTestnetExecutor({
     });
 
     log(
-      `[EXEC] CLOSED pnl=${pnl.toFixed(2)} equity=${account.equity.toFixed(2)}`
+      `[EXEC] CLOSED pnl=${pnl.toFixed(2)} equity=${account.equity.toFixed(
+        2
+      )}`
     );
 
     notifyTradeClose?.({
