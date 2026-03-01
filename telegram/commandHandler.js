@@ -86,7 +86,6 @@ function startTelegramBot({
       text += `${symbol}\n`;
       text += `Bias (${biasTF}): ${engine.getBias()}\n`;
       text += `Structure (${structureTF}): ${engine.getStructure()}\n\n`;
-      text += `5m State: ${engine.getStructureState()}\n\n`;
     }
 
     text += `Feed: ${feedHealth.getStatus()}\n`;
