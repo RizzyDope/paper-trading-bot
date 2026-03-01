@@ -1,121 +1,99 @@
 /**
- * Professional Risk Engine
- * Capital authority + daily + drawdown protection
+ * Binance-Authoritative Risk Engine
+ * No local equity. No synthetic resets.
  */
 
 function createRiskEngine({
-  startingEquity,
   riskPerTrade,
-  maxDailyLoss,
-  maxDrawdownPercent = 0.2, // 20% default safety breaker
+  maxDailyLossPercent,
 }) {
   // ==============================
-  // 🔐 CAPITAL AUTHORITY
+  // 📅 BINANCE UTC AUTHORITY
   // ==============================
 
-  let equity = startingEquity;
-  let peakEquity = startingEquity;
+  let currentUTCDate = null;
+  let dailyStartEquity = 0;
+  let maxDailyLossAmount = 0;
+  let isDailyHalted = false;
 
-  let dailyLoss = 0;
-  let tradingHalted = false;
+  // ==============================
+  // 🔄 INITIALIZE NEW UTC DAY
+  // ==============================
+
+  function initializeNewDay(equity, utcDate) {
+    currentUTCDate = utcDate;
+    dailyStartEquity = equity;
+    maxDailyLossAmount = equity * maxDailyLossPercent;
+    isDailyHalted = false;
+  }
+
+  // ==============================
+  // 🛑 CHECK DAILY LIMIT
+  // ==============================
+
+  function checkDailyLimit(currentEquity) {
+    const drawdown = dailyStartEquity - currentEquity;
+
+    if (drawdown >= maxDailyLossAmount) {
+      isDailyHalted = true;
+    }
+  }
 
   // ==============================
   // 🧠 TRADE PERMISSION
   // ==============================
 
-  function canTakeTrade() {
-    if (tradingHalted) return false;
+  function canTakeTrade(currentEquity) {
+    if (isDailyHalted) return false;
 
-    const maxLossAmount = equity * maxDailyLoss;
-    return dailyLoss < maxLossAmount && equity > 0;
+    checkDailyLimit(currentEquity);
+
+    return !isDailyHalted && currentEquity > 0;
   }
 
   // ==============================
-  // 📉 AFTER TRADE UPDATE
-  // ==============================
-
-  function updateAfterTrade(pnl) {
-    equity += pnl;
-
-    // 🛑 Hard capital floor
-    if (equity <= 0) {
-      equity = 0;
-      tradingHalted = true;
-    }
-
-    // 📈 Track peak equity for drawdown control
-    if (equity > peakEquity) {
-      peakEquity = equity;
-    }
-
-    // 📉 Track daily loss
-    if (pnl < 0) {
-      dailyLoss += Math.abs(pnl);
-    }
-
-    // 🛑 Drawdown circuit breaker
-    const drawdownThreshold = peakEquity * (1 - maxDrawdownPercent);
-    if (equity <= drawdownThreshold) {
-      tradingHalted = true;
-    }
-  }
-
-  // ==============================
-  // 📊 POSITION SIZING
+  // 📊 POSITION SIZING (LIVE EQUITY)
   // ==============================
 
   function calculatePositionSize({
     entryPrice,
     stopPrice,
+    currentEquity,
   }) {
-    if (equity <= 0) return 0;
+    if (currentEquity <= 0) return 0;
 
-    const riskAmount = equity * riskPerTrade;
+    const riskAmount = currentEquity * riskPerTrade;
     const riskPerUnit = Math.abs(entryPrice - stopPrice);
 
     if (riskPerUnit === 0) return 0;
 
-    const size = riskAmount / riskPerUnit;
-
-    // Prevent risking more than equity (extreme slippage guard)
-    if (riskAmount > equity) return 0;
-
-    return size;
-  }
-
-  // ==============================
-  // 🔄 DAILY RESET
-  // ==============================
-
-  function resetDailyLoss() {
-    dailyLoss = 0;
-  }
-
-  function setDailyLoss(amount) {
-    dailyLoss = amount;
-  }
-
-  function getDailyLoss() {
-    return dailyLoss;
-  }
-
-  function getEquity() {
-    return equity;
+    return riskAmount / riskPerUnit;
   }
 
   function isTradingHalted() {
-    return tradingHalted;
+    return isDailyHalted;
+  }
+
+  function getDailyStartEquity() {
+    return dailyStartEquity;
+  }
+
+  function getMaxDailyLossAmount() {
+    return maxDailyLossAmount;
+  }
+
+  function getCurrentUTCDate() {
+    return currentUTCDate;
   }
 
   return {
+    initializeNewDay,
     canTakeTrade,
     calculatePositionSize,
-    updateAfterTrade,
-    resetDailyLoss,
-    setDailyLoss,
-    getDailyLoss,
-    getEquity,
     isTradingHalted,
+    getDailyStartEquity,
+    getMaxDailyLossAmount,
+    getCurrentUTCDate,
   };
 }
 

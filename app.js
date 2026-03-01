@@ -3,7 +3,7 @@ const { log } = require("./core/logger");
 const env = require("./config/env");
 const { startTelegramBot } = require("./telegram/commandHandler");
 const { startPriceStream } = require("./market/priceStream");
-const { fetchMissingCandles } = require("./market/candleBackfill");
+// const { fetchMissingCandles } = require("./market/candleBackfill");
 const { createFeedHealth } = require("./market/feedHealth");
 const { evaluateDailyBias } = require("./engine/strategy/biasEvaluator");
 const { evaluateStructure } = require("./engine/strategy/structureEvaluator");
@@ -24,16 +24,16 @@ setInterval(() => {
   log("💓 system heartbeat");
 }, 60_000);
 
-// setTimeout(() => {
-//   executor.forceOpenTestPosition();
-// }, 60_000);
+// ===============================================
+// ⏰ Trading Time Filter (UNCHANGED)
+// ===============================================
 
 function isTradeTimeAllowed() {
   const now = new Date();
   const minutes = now.getUTCHours() * 60 + now.getUTCMinutes();
 
-  const blockStart = 20 * 60 + 30; // 20:30 UTC
-  const blockEnd = 0 * 60 + 30; // 00:30 UTC
+  const blockStart = 20 * 60 + 30;
+  const blockEnd = 0 * 60 + 30;
 
   if (minutes >= blockStart || minutes < blockEnd) {
     return false;
@@ -41,24 +41,33 @@ function isTradeTimeAllowed() {
   return true;
 }
 
-let lastRiskResetUTCDate = new Date().getUTCDate();
+// ===============================================
+// 🔐 RISK ENGINE (NO LOCAL EQUITY)
+// ===============================================
 
 const riskEngine = createRiskEngine({
-  startingEquity: env.startingEquity,
   riskPerTrade: env.riskPerTrade,
-  maxDailyLoss: env.maxDailyLoss,
+  maxDailyLossPercent: env.maxDailyLossPercent,
 });
+
+// ===============================================
+// 🧾 ACCOUNT (NO LOCAL EQUITY)
+// ===============================================
 
 const account = {
-  equity: env.startingEquity,
-  openPosition: null,
+  openPosition: null, // exchange authority
 };
 
-const performanceTracker = createPerformanceTracker({
-  startingEquity: account.equity, // 10000
-});
+// ===============================================
+// 📊 TRACKERS
+// ===============================================
 
+const performanceTracker = createPerformanceTracker();
 const executionTracker = createExecutionTracker();
+
+// ===============================================
+// 🚀 EXECUTOR (BINANCE AUTHORITY)
+// ===============================================
 
 const executor = createBinanceTestnetExecutor({
   account,
@@ -71,42 +80,19 @@ const executor = createBinanceTestnetExecutor({
   notifySystemAlert: startTelegramBot.notifySystemAlert,
 });
 
-/* ======================================================
-   🔄 STARTUP POSITION RESYNC (SAFE, ONCE)
-   ====================================================== */
-(async () => {
-  try {
-    log("🔄 Resyncing positions from exchange...");
-    await executor.resyncPosition("BTCUSDT");
-    await executor.resyncPosition("SOLUSDT");
-    log("✅ Position resync complete");
-  } catch (err) {
-    log("❌ Position resync failed:", err.message);
-  }
-})();
-/* ====================================================== */
+
+// ===============================================
+// 📡 FEED HEALTH
+// ===============================================
 
 const feedHealth = createFeedHealth({ log });
 
-function checkDailyRiskReset() {
-  const currentUTCDate = new Date().getUTCDate();
-  if (currentUTCDate !== lastRiskResetUTCDate) {
-    log("🔄 New UTC day detected — resetting daily risk");
+// ===============================================
+// 🧠 SYMBOL ENGINES
+// ===============================================
 
-     const summary = executionTracker.getSummary();
-
-      if (startTelegramBot.notifyDailyExecutionSummary) {
-        startTelegramBot.notifyDailyExecutionSummary(summary);
-      }
-
-    riskEngine.resetDailyLoss();
-    executionTracker.reset();
-    lastRiskResetUTCDate = currentUTCDate;
-  }
-}
-
-const btcEngine = createSymbolEngine({
-  symbol: "BTCUSDT",
+const xrpEngine = createSymbolEngine({
+  symbol: "XRPUSDT",
   log,
   executor,
   riskEngine,
@@ -122,11 +108,9 @@ const btcEngine = createSymbolEngine({
 
   createCandleStore,
   createCandleBuilder,
-
-  fetchMissingCandles,
 });
 
-const trxEngine = createSymbolEngine({
+const solEngine = createSymbolEngine({
   symbol: "SOLUSDT",
   log,
   executor,
@@ -143,14 +127,16 @@ const trxEngine = createSymbolEngine({
 
   createCandleStore,
   createCandleBuilder,
-
-  fetchMissingCandles,
 });
 
 const engines = {
-  BTCUSDT: btcEngine,
-  SOLUSDT: trxEngine,
+  XRPUSDT: xrpEngine,
+  SOLUSDT: solEngine,
 };
+
+// ===============================================
+// 🤖 TELEGRAM
+// ===============================================
 
 startTelegramBot({
   token: process.env.TELEGRAM_BOT_TOKEN,
@@ -164,17 +150,66 @@ startTelegramBot({
   log,
 });
 
-startPriceStream(({ symbol, bid, ask, timestamp }) => {
-  checkDailyRiskReset();
+// ===============================
+// 🧪 MANUAL TEST TRADE (REMOVE AFTER)
+// ===============================
 
+// setTimeout(() => {
+//   console.log("🚀 MANUAL TEST TRADE");
+
+//   executor.openPosition({
+//     symbol: "XRPUSDT", // or SOLUSDT
+//     side: "LONG", // or SHORT
+//     entryPrice: 1.40, // approximate current price
+//     stopPrice: 1.39, // small distance
+//   });
+
+// }, 5000);
+
+function scheduleDailySummary() {
+  const now = new Date();
+
+  const next = new Date();
+  next.setUTCHours(0, 5, 0, 0); // 00:05 UTC (1:05am Nigeria)
+
+  if (now > next) {
+    next.setUTCDate(next.getUTCDate() + 1);
+  }
+
+  const delay = next - now;
+
+  setTimeout(() => {
+    const summary = executionTracker.getSummary();
+
+    if (startTelegramBot.notifyDailyExecutionSummary) {
+      startTelegramBot.notifyDailyExecutionSummary(summary);
+    }
+
+    executionTracker.reset();
+
+    scheduleDailySummary(); // reschedule
+  }, delay);
+}
+
+scheduleDailySummary();
+
+// ===============================================
+// 📈 PRICE STREAM (STRATEGY ONLY)
+// ===============================================
+
+startPriceStream(({ symbol, bid, ask, timestamp }) => {
   const engine = engines[symbol];
   if (!engine) return;
 
   const midPrice = (bid + ask) / 2;
 
   engine.onPrice(midPrice, timestamp);
-  executor.onPrice({ bid, ask });
+
+  // ❌ REMOVED executor.onPrice()
+  // Stops and TP now exchange-native
 }, feedHealth);
+
+// ===============================================
 
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);

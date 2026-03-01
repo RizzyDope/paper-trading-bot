@@ -13,9 +13,8 @@ const env = {
   nodeEnv: process.env.NODE_ENV || "development",
   appName: process.env.APP_NAME || "paper-trading-bot",
 
-  startingEquity: Number(requireEnv("STARTING_EQUITY")),
   riskPerTrade: Number(requireEnv("RISK_PER_TRADE")),
-  maxDailyLoss: Number(requireEnv("MAX_DAILY_LOSS")),
+  maxDailyLossPercent: Number(requireEnv("MAX_DAILY_LOSS_PERCENT")),
 };
 
 module.exports = env;

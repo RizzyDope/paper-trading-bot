@@ -86,6 +86,7 @@ function startTelegramBot({
       text += `${symbol}\n`;
       text += `Bias (${biasTF}): ${engine.getBias()}\n`;
       text += `Structure (${structureTF}): ${engine.getStructure()}\n\n`;
+      text += `5m State: ${engine.getStructureState()}\n\n`;
     }
 
     text += `Feed: ${feedHealth.getStatus()}\n`;
@@ -139,11 +140,11 @@ function startTelegramBot({
 
     const text =
       "📍 Open Position\n" +
+      `Symbol: ${pos.symbol}\n` +
       `Side: ${pos.side}\n` +
-      `Entry: ${pos.entryPrice}\n` +
-      `Stop: ${pos.stopPrice}\n` +
-      `Take Profit: ${pos.takeProfitPrice}\n` +
-      `Size: ${pos.size.toFixed(4)}\n`;
+      `Stop: ${pos.stop}\n` +
+      `Take Profit: ${pos.takeProfit}\n` +
+      `Entry Equity: ${pos.entryEquity.toFixed(2)}\n`;
 
     bot.sendMessage(chatId, text).catch(() => {});
   });

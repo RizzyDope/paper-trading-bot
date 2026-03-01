@@ -9,16 +9,27 @@ function createBinanceTestnetExecutor({
   executionTracker,
   notifyTradeOpen,
   notifyTradeClose,
-  notifySystemAlert, // ✅ kept intact
+  notifySystemAlert,
 }) {
   const BASE_URL = "https://testnet.binancefuture.com";
 
-  // ✅ Symbol precision cache
-  const symbolPrecisionCache = {};
+  let monitoring = false;
+  let timeOffset = 0;
 
-  // =====================================================
-  // SIGNING HELPERS
-  // =====================================================
+  async function syncServerTime() {
+    try {
+      const res = await axios.get(`${BASE_URL}/fapi/v1/time`);
+      const serverTime = res.data.serverTime;
+      timeOffset = serverTime - Date.now();
+      log(`🕒 Time synced. Offset: ${timeOffset} ms`);
+    } catch (err) {
+      log("⚠️ Failed to sync server time.");
+    }
+  }
+
+  // =============================
+  // SIGN
+  // =============================
 
   function signQuery(query, secret) {
     return crypto
@@ -27,16 +38,50 @@ function createBinanceTestnetExecutor({
       .digest("hex");
   }
 
-  // =====================================================
-  // PRIVATE REQUEST (POST)
-  // =====================================================
-
-  async function privateRequest(path, params) {
-    const timestamp = Date.now();
-
+  async function privateGet(path, params = {}) {
+    const timestamp = Date.now() + timeOffset;
     const query = new URLSearchParams({
       ...params,
       timestamp,
+      recvWindow: 5000,
+    }).toString();
+
+    const signature = signQuery(
+      query,
+      process.env.BINANCE_TESTNET_API_SECRET
+    );
+
+    try {
+      const res = await axios.get(
+        `${BASE_URL}${path}?${query}&signature=${signature}`,
+        {
+          headers: {
+            "X-MBX-APIKEY": process.env.BINANCE_TESTNET_API_KEY,
+          },
+        }
+      );
+      return res.data;
+    } catch (err) {
+      log("❌ BINANCE GET ERROR");
+
+      if (err.response && err.response.data) {
+        log(JSON.stringify(err.response.data, null, 2));
+      } else if (err.request) {
+        log("No response received from Binance.");
+      } else {
+        log(err.message);
+      }
+
+      return null;
+    }
+  }
+
+  async function privatePost(path, params = {}) {
+    const timestamp = Date.now() + timeOffset;
+    const query = new URLSearchParams({
+      ...params,
+      timestamp,
+      recvWindow: 5000,
     }).toString();
 
     const signature = signQuery(
@@ -52,46 +97,45 @@ function createBinanceTestnetExecutor({
           headers: {
             "X-MBX-APIKEY": process.env.BINANCE_TESTNET_API_KEY,
           },
-          timeout: 10_000,
         }
       );
-
       return res.data;
     } catch (err) {
-      log("❌ BINANCE API ERROR");
-      log(`Path: ${path}`);
-
+      log("❌ BINANCE POST ERROR");
       if (err.response && err.response.data) {
-        const { code, msg } = err.response.data;
-
         log(JSON.stringify(err.response.data, null, 2));
-        executionTracker?.recordExchangeReject(code, msg);
-
-        notifySystemAlert?.(
-          `Exchange rejected request\n` +
-            `Path: ${path}\n` +
-            `Symbol: ${params?.symbol || "UNKNOWN"}\n` +
-            `Code: ${code}\n` +
-            `Message: ${msg}`
-        );
       } else {
         log(err.message);
       }
-
+      executionTracker?.recordExchangeReject(
+        err?.response?.data?.code,
+        err?.response?.data?.msg
+      );
       return null;
     }
   }
 
-  // =====================================================
-  // PRIVATE GET (UNCHANGED)
-  // =====================================================
+  async function ensureLeverage(symbol, leverage = 10) {
+    const res = await privatePost("/fapi/v1/leverage", {
+      symbol,
+      leverage,
+    });
 
-  async function privateGet(path, params) {
-    const timestamp = Date.now();
+    if (!res) {
+      log(`⚠️ Could not set leverage for ${symbol}`);
+      return false;
+    }
 
+    log(`⚙️ Leverage set to ${leverage}x for ${symbol}`);
+    return true;
+  }
+
+  async function privateDelete(path, params = {}) {
+    const timestamp = Date.now() + timeOffset;
     const query = new URLSearchParams({
       ...params,
       timestamp,
+      recvWindow: 5000,
     }).toString();
 
     const signature = signQuery(
@@ -100,315 +144,479 @@ function createBinanceTestnetExecutor({
     );
 
     try {
-      const res = await axios.get(
+      const res = await axios.delete(
         `${BASE_URL}${path}?${query}&signature=${signature}`,
         {
           headers: {
             "X-MBX-APIKEY": process.env.BINANCE_TESTNET_API_KEY,
           },
-          timeout: 10_000,
         }
       );
-
       return res.data;
     } catch (err) {
-      log("❌ BINANCE API ERROR");
-      log(`Path: ${path}`);
-      log(err?.response?.data || err.message);
+      log("❌ BINANCE DELETE ERROR");
+
+      if (err.response && err.response.data) {
+        log(JSON.stringify(err.response.data, null, 2));
+      } else {
+        log(err.message);
+      }
+
       return null;
     }
   }
 
-  // =====================================================
-  // ✅ PRECISION FETCH (NEW — ONLY ADDITION)
-  // =====================================================
+  // =============================
+  // BINANCE AUTHORITY
+  // =============================
 
-  async function getSymbolStepSize(symbol) {
-    if (symbolPrecisionCache[symbol]) {
-      return symbolPrecisionCache[symbol];
-    }
-
-    const exchangeInfo = await privateGet("/fapi/v1/exchangeInfo", {});
-    if (!exchangeInfo) return null;
-
-    const symbolInfo = exchangeInfo.symbols.find(
-      (s) => s.symbol === symbol
-    );
-
-    if (!symbolInfo) return null;
-
-    const lotFilter = symbolInfo.filters.find(
-      (f) => f.filterType === "LOT_SIZE"
-    );
-
-    if (!lotFilter) return null;
-
-    const stepSize = parseFloat(lotFilter.stepSize);
-
-    symbolPrecisionCache[symbol] = stepSize;
-
-    return stepSize;
+  async function getBinanceUTCDate() {
+    const res = await privateGet("/fapi/v1/time");
+    if (!res) return null;
+    return new Date(res.serverTime).getUTCDate();
   }
 
-  // =====================================================
-  // ENSURE LEVERAGE (UNCHANGED)
-  // =====================================================
+  async function getCrossWalletBalance() {
+    const balances = await privateGet("/fapi/v2/balance");
+    if (!balances) return null;
 
-  async function ensureLeverage(symbol, leverage = 10) {
-    const res = await privateRequest("/fapi/v1/leverage", {
-      symbol,
-      leverage,
-    });
-
-    if (!res) {
-      log(`⚠️ Could not confirm leverage for ${symbol}`);
-      return;
-    }
-
-    log(`⚙️ Leverage ensured for ${symbol}: ${leverage}x`);
+    const usdt = balances.find((b) => b.asset === "USDT");
+    return usdt ? Number(usdt.crossWalletBalance) : null;
   }
-
-  // =====================================================
-  // POSITION RESYNC (UNCHANGED)
-  // =====================================================
 
   async function fetchOpenPosition(symbol) {
     const res = await privateGet("/fapi/v2/positionRisk", { symbol });
-    if (!res || !Array.isArray(res)) return null;
+    if (!res) return null;
 
     const pos = res.find((p) => Number(p.positionAmt) !== 0);
-    if (!pos) return null;
-
-    return {
-      symbol: pos.symbol,
-      side: Number(pos.positionAmt) > 0 ? "LONG" : "SHORT",
-      entryPrice: Number(pos.entryPrice),
-      size: Math.abs(Number(pos.positionAmt)),
-    };
+    return pos || null;
   }
 
-  async function resyncPosition(symbol) {
-    log(`[RESYNC] Checking live position for ${symbol}`);
-    const livePos = await fetchOpenPosition(symbol);
+  async function getStepSize(symbol) {
+    const info = await privateGet("/fapi/v1/exchangeInfo");
+    if (!info) return null;
 
-    if (!livePos) {
-      if (account.openPosition) {
-        log("[RESYNC] ⚠️ Local position cleared (no live position)");
-        account.openPosition = null;
-      }
-      return;
-    }
+    const symbolInfo = info.symbols.find(s => s.symbol === symbol);
+    if (!symbolInfo) return null;
 
-    log("[RESYNC] ✅ Live position detected — restoring state");
+    const lotFilter = symbolInfo.filters.find(
+      f => f.filterType === "LOT_SIZE"
+    );
 
-    account.openPosition = {
-      ...livePos,
-      stopPrice: null,
-      takeProfitPrice: null,
-    };
+    return lotFilter ? parseFloat(lotFilter.stepSize) : null;
   }
 
-  // =====================================================
-  // CORE LOGIC
-  // =====================================================
+  async function getTickSize(symbol) {
+    const info = await privateGet("/fapi/v1/exchangeInfo");
+    if (!info) return null;
+
+    const symbolInfo = info.symbols.find(s => s.symbol === symbol);
+    if (!symbolInfo) return null;
+
+    const priceFilter = symbolInfo.filters.find(
+      f => f.filterType === "PRICE_FILTER"
+    );
+
+    return priceFilter ? parseFloat(priceFilter.tickSize) : null;
+  }
+
+  // =============================
+  // CORE
+  // =============================
 
   function hasOpenPosition() {
     return account.openPosition !== null;
   }
 
   async function openPosition({ symbol, side, entryPrice, stopPrice }) {
-    if (!riskEngine.canTakeTrade()) {
-      log("[EXEC] ❌ Trade blocked — risk engine disallowed");
-      executionTracker?.recordInternalReject("RISK_BLOCKED");
+    if (account.openPosition) {
+      log("⚠️ Position already open globally.");
       return;
     }
 
+    await syncServerTime();
+
+    // 1️⃣ Fetch balance
+    const currentEquity = await getCrossWalletBalance();
+    if (!currentEquity) {
+      log("❌ Cannot fetch balance.");
+      return;
+    }
+
+    // 2️⃣ Check Binan ce UTC
+    const utcDate = await getBinanceUTCDate();
+    if (riskEngine.getCurrentUTCDate() !== utcDate) {
+      riskEngine.initializeNewDay(currentEquity, utcDate);
+      performanceTracker.setStartingEquity(currentEquity);
+      log("📅 New Binance UTC Day");
+      log(`💰 Start Equity: ${currentEquity.toFixed(2)}`);
+      log(
+        `⚠️ Max Daily Risk: ${riskEngine
+          .getMaxDailyLossAmount()
+          .toFixed(2)}`
+      );
+    }
+
+    // 3️⃣ Daily halt check
+    if (!riskEngine.canTakeTrade(currentEquity)) {
+      log("⛔ Daily loss limit reached.");
+      return;
+    }
+
+    // 4️⃣ Size
     const rawSize = riskEngine.calculatePositionSize({
       entryPrice,
       stopPrice,
+      currentEquity,
     });
 
-    // ✅ NEW — Dynamic precision handling
-    const stepSize = await getSymbolStepSize(symbol);
+    if (rawSize <= 0) {
+      log("❌ Invalid size.");
+      return;
+    }
+
+   const stepSize = await getStepSize(symbol);
     if (!stepSize) {
-      log(`[EXEC] ❌ Could not fetch precision for ${symbol}`);
+      log("❌ Could not fetch step size.");
       return;
     }
 
-    const size = Math.floor(rawSize / stepSize) * stepSize;
+    const qtyDecimals = Math.max(
+      0,
+      Math.round(-Math.log10(stepSize))
+    );
 
-    if (size <= 0) {
-      log(
-        `[EXEC] ❌ Size too small for ${symbol} (raw=${rawSize.toFixed(
-          6
-        )}) — skipped`
-      );
-      executionTracker?.recordInternalReject("SIZE_TOO_SMALL");
+    const adjustedSize =
+      Math.floor(rawSize / stepSize) * stepSize;
+
+    if (adjustedSize <= 0) {
+      log("❌ Size too small after precision adjustment.");
       return;
     }
 
-    const decimals = Math.max(0, Math.round(-Math.log10(stepSize)));
-    const formattedSize = size.toFixed(decimals);
+    const decimals = Math.max(
+      0,
+      Math.round(-Math.log10(stepSize))
+    );
 
-    await ensureLeverage(symbol, 10);
+    // 🔒 Margin Protection
+    const leverage = 5;
+    const maxMarginUsage = currentEquity * 0.4; // 50% cap
+
+    const maxNotional = maxMarginUsage * leverage;
+    const maxSizeByMargin = maxNotional / entryPrice;
+
+    const finalSize = Math.min(adjustedSize, maxSizeByMargin);
+
+    if (finalSize <= 0) {
+      log("❌ Size invalid after margin cap.");
+      return;
+    }
+
+    const quantity = finalSize.toFixed(decimals);
 
     const orderSide = side === "LONG" ? "BUY" : "SELL";
 
-    log(`[EXEC] Opening ${side} ${symbol} size=${formattedSize}`);
+    // 5️⃣ Record entry balance
+    const entryEquity = currentEquity;
 
-    const res = await privateRequest("/fapi/v1/order", {
-      symbol,
-      side: orderSide,
-      type: "MARKET",
-      quantity: formattedSize,
-      positionSide: "BOTH",
-    });
-
-    if (!res) {
-      log("⚠️ Order NOT placed — API error");
+    // 🔥 ENSURE LEVERAGE BEFORE ENTRY
+    const leverageOk = await ensureLeverage(symbol, leverage);
+    if (!leverageOk) {
+      log("❌ Cannot set leverage. Entry aborted.");
       return;
     }
 
-    const riskPerUnit = Math.abs(entryPrice - stopPrice);
-    const riskAmount = riskPerUnit * parseFloat(formattedSize);
+    // 6️⃣ Place market
+    const marketOrder = await privatePost("/fapi/v1/order", {
+      symbol,
+      side: orderSide,
+      type: "MARKET",
+      quantity,
+    });
 
-    const takeProfitPrice =
+    if (!marketOrder) {
+      log("❌ Entry failed.");
+      return;
+    }
+
+    log("✅ MARKET ENTRY PLACED");
+
+    // Wait a bit for fill
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const pos = await fetchOpenPosition(symbol);
+
+    if (!pos) {
+      log("❌ Position not found after entry.");
+      return;
+    }
+
+    log("📊 POSITION OPENED");
+    log(`Symbol: ${symbol}`);
+    log(`Side: ${side}`);
+    log(`Size: ${pos.positionAmt}`);
+    log(`Entry Price: ${pos.entryPrice}`);
+    log(`Notional: ${pos.notional}`);
+    log(`Leverage: ${pos.leverage}`);
+    log(`Liquidation: ${pos.liquidationPrice}`);
+
+    const actualEntry = Number(pos.entryPrice);
+    const riskDistance = Math.abs(entryPrice - stopPrice);
+
+    const stop =
       side === "LONG"
-        ? entryPrice + riskPerUnit * 2
-        : entryPrice - riskPerUnit * 2;
+        ? actualEntry - riskDistance
+        : actualEntry + riskDistance;
+
+    const takeProfit =
+      side === "LONG"
+        ? actualEntry + riskDistance * 3
+        : actualEntry - riskDistance * 3;
+
+    const exitSide = side === "LONG" ? "SELL" : "BUY";
+
+    const tickSize = await getTickSize(symbol);
+    if (!tickSize) {
+      log("❌ Could not fetch tick size.");
+      return;
+    }
+
+    // Determine decimal precision
+    const pricePrecision =
+      tickSize.toString().split(".")[1]?.length || 0;
+
+    // Round to tick size
+    const rawRoundedStop =
+      Math.floor(stop / tickSize) * tickSize;
+
+    const rawRoundedTP =
+      Math.floor(takeProfit / tickSize) * tickSize;
+
+    // Remove floating noise
+    const stopFormatted = Number(
+      rawRoundedStop.toFixed(pricePrecision)
+    );
+
+    const tpFormatted = Number(
+      rawRoundedTP.toFixed(pricePrecision)
+    );
+
+    log(`🛑 Stop Price (rounded): ${stopFormatted}`);
+    log(`🎯 Take Profit Price (rounded): ${tpFormatted}`);
+
+    // 7️⃣ Place SL
+    const positionAmt = Math.abs(Number(pos.positionAmt));
+    const riskAmount = Math.abs(actualEntry - stopFormatted) * positionAmt;
+
+    const formattedQty = Number(positionAmt).toFixed(qtyDecimals);
+
+    const slOrder = await privatePost("/fapi/v1/algoOrder", {
+      algoType: "CONDITIONAL",
+      symbol,
+      side: exitSide,
+      type: "STOP_MARKET",
+      triggerPrice: String(stopFormatted),
+      quantity: String(formattedQty),
+      reduceOnly: "true",
+      workingType: "MARK_PRICE",
+    });
+
+    if (!slOrder || slOrder.code) {
+      log("❌ SL failed — closing immediately.");
+
+      await cleanupProtectiveOrders(symbol);
+
+      await privatePost("/fapi/v1/order", {
+        symbol,
+        side: exitSide,
+        type: "MARKET",
+        quantity: formattedQty,
+        reduceOnly: "true",
+      });
+
+      return;
+    }
+
+    log(`🛑 SL PLACED @ ${stopFormatted}`);
+
+    // 8️⃣ Place TP
+    const tpOrder = await privatePost("/fapi/v1/algoOrder", {
+      algoType: "CONDITIONAL",
+      symbol,
+      side: exitSide,
+      type: "TAKE_PROFIT_MARKET",
+      triggerPrice: String(tpFormatted),
+      quantity: String(formattedQty),
+      reduceOnly: "true",
+      workingType: "MARK_PRICE",
+    });
+
+    if (!tpOrder) {
+      log("❌ TP failed — cancelling SL and closing immediately.");
+
+      // cancel SL
+      await cleanupProtectiveOrders(symbol);
+
+      // close position
+      await privatePost("/fapi/v1/order", {
+        symbol,
+        side: exitSide,
+        type: "MARKET",
+        quantity: formattedQty,
+        reduceOnly: "true",
+      });
+
+      return;
+    }
+
+    log(`🎯 TP PLACED @ ${tpFormatted}`);
 
     account.openPosition = {
       symbol,
       side,
-      entryPrice,
-      stopPrice,
-      takeProfitPrice,
-      size: parseFloat(formattedSize),
-      openedAt: Date.now(),
-      riskAmount,
+      entryPrice: actualEntry,
+      entryEquity,
+      stop,
+      takeProfit,
+      risk: riskAmount,
     };
-
-    log("[EXEC] Position opened");
 
     notifyTradeOpen?.({
       symbol,
       side,
-      entryPrice,
-      stopPrice,
-      takeProfitPrice,
-      size: parseFloat(formattedSize),
+      entry: actualEntry,
+      stop,
+      takeProfit,
     });
+
+    startPositionMonitor(symbol);
   }
 
-  async function closePosition(exitPrice, reason) {
-    const pos = account.openPosition;
-    if (!pos) return;
+  async function cleanupProtectiveOrders(symbol) {
+    try {
+      const result = await privateDelete("/fapi/v1/algoOpenOrders", { symbol });
+      
+      if (result && result.code === 200) {
+        log(`🧹 All open algo orders for ${symbol} cancelled.`);
+      } else {
+        log(`🧹 Cleanup info: ${result.msg || "No orders to cancel"}`);
+      }
+    } catch (err) {
+      log("⚠ Cleanup algo error:", err.message);
+    }
+  }
 
-    log(`[EXEC] Closing position (${reason})`);
+  async function startPositionMonitor(symbol) {
+    if (monitoring) return;
+    monitoring = true;
 
-    const side = pos.side === "LONG" ? "SELL" : "BUY";
+    log("🔍 Monitor started");
 
-    const res = await privateRequest("/fapi/v1/order", {
-      symbol: pos.symbol,
-      side,
-      type: "MARKET",
-      quantity: pos.size.toString(),
-      reduceOnly: true,
-      positionSide: "BOTH",
-    });
+    while (account.openPosition) {
+      await new Promise((r) => setTimeout(r, 3000));
 
-    if (!res) {
-      log("⚠️ Close order failed — position state unchanged");
-      return;
+      const pos = await fetchOpenPosition(symbol);
+
+      if (!pos) {
+        log("📉 Position confirmed closed by exchange.");
+
+        await cleanupProtectiveOrders(symbol);
+
+        const entryEquity = account.openPosition.entryEquity;
+        const finalEquity = await getCrossWalletBalance();
+
+        // Fetch last trades to detect exit details
+        const trades = await privateGet("/fapi/v1/userTrades", {
+          symbol,
+          limit: 10,
+        });
+
+        let exitPrice = null;
+        let realized = 0;
+
+        if (trades && trades.length) {
+          const last = trades.reverse().find(t => t.realizedPnl !== "0");
+          if (last) {
+            exitPrice = Number(last.price);
+            realized = Number(last.realizedPnl);
+          }
+        }
+
+        let reason = "UNKNOWN";
+
+        if (exitPrice) {
+          if (Math.abs(exitPrice - account.openPosition.stop) < 0.0001)
+            reason = "STOP_LOSS";
+
+          if (Math.abs(exitPrice - account.openPosition.takeProfit) < 0.0001)
+            reason = "TAKE_PROFIT";
+        }
+
+        const pnl = realized;
+        const result = pnl > 0 ? "WIN" : "LOSS";
+
+        performanceTracker.recordTrade({
+          side: account.openPosition.side,
+          entry: account.openPosition.entryPrice, 
+          exit: exitPrice,
+          pnl,
+          risk: account.openPosition.risk,
+          result,
+          reason,
+        });
+
+        log("📉 POSITION CLOSED");
+        log(`Reason: ${reason}`);
+        log(`Exit Price: ${exitPrice}`);
+        log(`Realized PnL: ${pnl.toFixed(2)}`);
+        log(`Equity Before: ${entryEquity.toFixed(2)}`);
+        log(`Equity After: ${finalEquity.toFixed(2)}`);
+
+        notifyTradeClose?.({
+          symbol,
+          pnl,
+          equity: finalEquity,
+        });
+
+        account.openPosition = null;
+        monitoring = false;
+        log("🟢 Monitor stopped");
+        return;
+      }
     }
 
-    const pnl =
-      pos.side === "LONG"
-        ? (exitPrice - pos.entryPrice) * pos.size
-        : (pos.entryPrice - exitPrice) * pos.size;
-
-    riskEngine.updateAfterTrade(pnl);
-    account.equity = riskEngine.getEquity();
-
-    const r = pos.riskAmount > 0 ? pnl / pos.riskAmount : 0;
-
-    performanceTracker.recordTrade({
-      side: pos.side,
-      entry: pos.entryPrice,
-      exit: exitPrice,
-      pnl,
-      r,
-      result: pnl > 0 ? "WIN" : "LOSS",
-      reason,
-      durationMinutes: (Date.now() - pos.openedAt) / 60000,
-    });
-
-    log(
-      `[EXEC] CLOSED pnl=${pnl.toFixed(2)} equity=${account.equity.toFixed(
-        2
-      )}`
-    );
-
-    notifyTradeClose?.({
-      symbol: pos.symbol,
-      side: pos.side,
-      entry: pos.entryPrice,
-      exit: exitPrice,
-      pnl,
-      r,
-      reason,
-      equity: account.equity,
-    });
-
-    account.openPosition = null;
+    monitoring = false;
   }
 
   function onDecision(decision, price, atr, symbol) {
-    if (!atr) return;
+  if (!atr) return;
 
-    const stopDistance = atr * 1.5;
+  const stopDistance = atr * 1.5;
 
-    if (decision === "ENTER_LONG" && !account.openPosition) {
-      openPosition({
-        symbol,
-        side: "LONG",
-        entryPrice: price,
-        stopPrice: price - stopDistance,
-      });
-    }
-
-    if (decision === "ENTER_SHORT" && !account.openPosition) {
-      openPosition({
-        symbol,
-        side: "SHORT",
-        entryPrice: price,
-        stopPrice: price + stopDistance,
-      });
-    }
+  if (decision === "ENTER_LONG") {
+    openPosition({
+      symbol,
+      side: "LONG",
+      entryPrice: price,
+      stopPrice: price - stopDistance,
+    });
   }
 
-  function onPrice({ bid, ask }) {
-    const pos = account.openPosition;
-    if (!pos) return;
-
-    if (pos.side === "LONG" && bid <= pos.stopPrice)
-      closePosition(bid, "STOP_LOSS");
-
-    if (pos.side === "SHORT" && ask >= pos.stopPrice)
-      closePosition(ask, "STOP_LOSS");
-
-    if (pos.side === "LONG" && bid >= pos.takeProfitPrice)
-      closePosition(bid, "TAKE_PROFIT");
-
-    if (pos.side === "SHORT" && ask <= pos.takeProfitPrice)
-      closePosition(ask, "TAKE_PROFIT");
+  if (decision === "ENTER_SHORT") {
+    openPosition({
+      symbol,
+      side: "SHORT",
+      entryPrice: price,
+      stopPrice: price + stopDistance,
+    });
   }
+}
 
   return {
     onDecision,
-    onPrice,
+    openPosition,
     hasOpenPosition,
-    resyncPosition,
   };
 }
 

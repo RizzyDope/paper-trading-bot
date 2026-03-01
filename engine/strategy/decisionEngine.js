@@ -12,9 +12,7 @@ function decide({
   structure,
   entry,
   hasOpenPosition,
-  riskAllowed, 
 }) {
-  if (!riskAllowed) return "HOLD";
   if (hasOpenPosition) return "HOLD";
 
   if (entry === "LONG_ENTRY") return "ENTER_LONG";

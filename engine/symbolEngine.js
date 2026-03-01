@@ -83,7 +83,6 @@ function createSymbolEngine({
         structure: currentStructure5m,
         entry: entrySignal,
         hasOpenPosition: executor.hasOpenPosition(),
-        riskAllowed: riskEngine.canTakeTrade(),
       });
 
       let decision = decisionRaw;

@@ -1,14 +1,10 @@
-/**
- * PerformanceTracker — Option A
- * Pure trade ledger with derived statistics
- */
-
-function createPerformanceTracker({ startingEquity }) {
-  if (!Number.isFinite(startingEquity)) {
-    throw new Error("PerformanceTracker requires startingEquity");
-  }
-
+function createPerformanceTracker() {
   const trades = [];
+  let startingEquity = 0;
+
+  function setStartingEquity(value) {
+    startingEquity = value;
+  }
 
   function recordTrade(trade) {
     const {
@@ -16,17 +12,20 @@ function createPerformanceTracker({ startingEquity }) {
       entry,
       exit,
       pnl,
+      risk,
       result,
       reason,
       durationMinutes,
-      r,
     } = trade;
+
+    const r = risk > 0 ? pnl / risk : 0;
 
     trades.push({
       side,
       entry,
       exit,
       pnl,
+      risk,
       r,
       result,
       reason,
@@ -52,7 +51,6 @@ function createPerformanceTracker({ startingEquity }) {
     }
 
     const avgR = totalTrades > 0 ? totalR / totalTrades : 0;
-    const equity = startingEquity + netPnl;
 
     return {
       totalTrades,
@@ -60,7 +58,7 @@ function createPerformanceTracker({ startingEquity }) {
       losses,
       netPnl,
       avgR,
-      equity,
+      equity: startingEquity + netPnl,
     };
   }
 
@@ -77,6 +75,7 @@ function createPerformanceTracker({ startingEquity }) {
     getSummary,
     getTrades,
     reset,
+    setStartingEquity,
   };
 }
 

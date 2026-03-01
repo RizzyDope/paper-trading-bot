@@ -7,7 +7,7 @@ const { log } = require("../core/logger");
  */
 function startPriceStream(onPrice, feedHealth) {
   const url = "wss://stream-testnet.bybit.com/v5/public/linear";
-  const symbols = ["BTCUSDT", "SOLUSDT"];
+  const symbols = ["XRPUSDT", "SOLUSDT"];
 
   let ws = null;
   let reconnectTimeout = null;
